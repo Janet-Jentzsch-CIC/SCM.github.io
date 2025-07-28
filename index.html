@@ -3,511 +3,510 @@
       ------------------------------------------------------------------ -->
 <!DOCTYPE html>
 <html lang="de" xmlns="http://www.w3.org/1999/html">
-  <head>
-    <meta charset="UTF-8" />
+<head>
+    <meta charset="UTF-8"/>
 
     <!-- Pfad ist relativ, daher funktioniert die URL sowohl lokal als auch auf GitHub Pages  -->
-    <link href="./favicon.ico" rel="icon" type="image/x-icon" />
+    <link href="./favicon.ico" rel="icon" type="image/x-icon"/>
 
     <!--  =========================================
          Responsives Viewport-Meta
          – verhindert zusätzlich das Zoomen auf Smartphones
          ========================================== -->
     <meta
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-      name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+            name="viewport"
     />
 
     <title>SC Magdeburg Handball Tracker v2</title>
 
     <!-- Zentrales Stylesheet -->
-    <link href="./src/css/styles.css" rel="stylesheet" />
+    <link href="./src/css/styles.css" rel="stylesheet"/>
 
     <!--  Progressive-Web-App-Meta ------------------------------------ -->
-    <link href="./manifest.json" rel="manifest" />
-    <meta content="yes" name="mobile-web-app-capable" />
-    <meta content="yes" name="apple-mobile-web-app-capable" />
+    <link href="./manifest.json" rel="manifest"/>
+    <meta content="yes" name="mobile-web-app-capable"/>
+    <meta content="yes" name="apple-mobile-web-app-capable"/>
     <meta
-      content="black-translucent"
-      name="apple-mobile-web-app-status-bar-style"
+            content="black-translucent"
+            name="apple-mobile-web-app-status-bar-style"
     />
-    <meta content="Handball Tracker" name="apple-mobile-web-app-title" />
-    <meta content="#006521" name="theme-color" />
+    <meta content="Handball Tracker" name="apple-mobile-web-app-title"/>
+    <meta content="#006521" name="theme-color"/>
 
     <!-- ===============================================================
          SheetJS-Loader – lädt zuerst lokal, dann CDN-Fallback
          aktiviert den Export-Button erst nach erfolgreichem Load.
          ============================================================== -->
     <script>
-      (function loadXLSX() {
-        /* 1) kleinen Helper, um später den Export-Button freizuschalten */
-        function enableExportBtn() {
-          const btn = document.getElementById("export-btn");
-          if (btn) btn.disabled = false;
-        }
-
-        /* 2) Lokale Bibliothek versuchen --------------------------- */
-        const local = document.createElement("script");
-        local.src = "./vendor/xlsx.full.min.js";
-
-        /* Erfolg –> Button freischalten */
-        local.onload = () => {
-          if (window.XLSX?.utils) {
-            if (document.readyState === "loading")
-              document.addEventListener("DOMContentLoaded", enableExportBtn);
-            else enableExportBtn();
-          }
-        };
-
-        /* Fehler –> CDN-Fallback */
-        local.onerror = () => {
-          console.warn("[XLSX] Lokaler Load fehlgeschlagen – wechsle auf CDN");
-          const cdn = document.createElement("script");
-          cdn.src =
-            "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
-
-          cdn.onload = () => {
-            if (window.XLSX?.utils) {
-              if (document.readyState === "loading")
-                document.addEventListener("DOMContentLoaded", enableExportBtn);
-              else enableExportBtn();
-            } else {
-              console.error("[XLSX] CDN-Load ok, aber XLSX nicht verfügbar");
+        (function loadXLSX() {
+            /* 1) kleinen Helper, um später den Export-Button freizuschalten */
+            function enableExportBtn() {
+                const btn = document.getElementById("export-btn");
+                if (btn) btn.disabled = false;
             }
-          };
 
-          cdn.onerror = () =>
-            console.error(
-              "[XLSX] CDN-Laden fehlgeschlagen – Export bleibt deaktiviert"
-            );
+            /* 2) Lokale Bibliothek versuchen --------------------------- */
+            const local = document.createElement("script");
+            local.src = "./vendor/xlsx.full.min.js";
 
-          document.head.appendChild(cdn);
-        };
+            /* Erfolg –> Button freischalten */
+            local.onload = () => {
+                if (window.XLSX?.utils) {
+                    if (document.readyState === "loading")
+                        document.addEventListener("DOMContentLoaded", enableExportBtn);
+                    else enableExportBtn();
+                }
+            };
 
-        /* 3) Start des Ladevorgangs */
-        document.head.appendChild(local);
-      })();
+            /* Fehler –> CDN-Fallback */
+            local.onerror = () => {
+                console.warn("[XLSX] Lokaler Load fehlgeschlagen – wechsle auf CDN");
+                const cdn = document.createElement("script");
+                cdn.src =
+                    "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+
+                cdn.onload = () => {
+                    if (window.XLSX?.utils) {
+                        if (document.readyState === "loading")
+                            document.addEventListener("DOMContentLoaded", enableExportBtn);
+                        else enableExportBtn();
+                    } else {
+                        console.error("[XLSX] CDN-Load ok, aber XLSX nicht verfügbar");
+                    }
+                };
+
+                cdn.onerror = () =>
+                    console.error(
+                        "[XLSX] CDN-Laden fehlgeschlagen – Export bleibt deaktiviert"
+                    );
+
+                document.head.appendChild(cdn);
+            };
+
+            /* 3) Start des Ladevorgangs */
+            document.head.appendChild(local);
+        })();
     </script>
 
     <!-- Debug: Browser-Cache unterdrücken (Entwicklung) -->
     <meta
-      content="no-cache, no-store, must-revalidate"
-      http-equiv="Cache-Control"
+            content="no-cache, no-store, must-revalidate"
+            http-equiv="Cache-Control"
     />
-    <meta content="no-cache" http-equiv="Pragma" />
-    <meta content="0" http-equiv="Expires" />
-  </head>
+    <meta content="no-cache" http-equiv="Pragma"/>
+    <meta content="0" http-equiv="Expires"/>
+</head>
 
-  <body>
-    <!--  Toast-Container für Live-Meldungen -------------------------------- -->
-    <div id="toast-container"></div>
+<body>
+<!--  Toast-Container für Live-Meldungen -------------------------------- -->
+<div id="toast-container"></div>
 
-    <div class="container">
-      <!-- =========================================================
-         HEADER-BEREICH  (Logo, Match-Info, Spieluhr, GK-Toggle)
-         ========================================================= -->
-      <header class="header">
+<div class="container">
+    <!-- =========================================================
+       HEADER-BEREICH  (Logo, Match-Info, Spieluhr, GK-Toggle)
+       ========================================================= -->
+    <header class="header">
         <div class="header-inner">
-          <!-- linke Spalte: Logo + Vereinsname -->
-          <div class="club-col">
-            <img
-              class="club-logo"
-              src="./src/images/scm_logo_sterne.jpg"
-              alt="SC Magdeburg Logo"
-            />
-            <!-- <h2 class="club-name">SC Magdeburg</h2>-->
-          </div>
-
-          <!-- rechte Spalte: App-Titel + Match-Infos + Timer/GK/Score -->
-          <div class="title-col">
-            <h1 class="app-title">SC Magdeburg Handball Shot Tracker</h1>
-
-            <!-- Match-Tabelle (wird von header.js gefüllt) -->
-            <div class="match-information">
-              <div id="information-container"></div>
+            <!-- linke Spalte: Logo + Vereinsname -->
+            <div class="club-col">
+                <img
+                        class="club-logo"
+                        src="./src/images/scm_logo_sterne.jpg"
+                        alt="SC Magdeburg Logo"
+                />
+                <!-- <h2 class="club-name">SC Magdeburg</h2>-->
             </div>
 
-            <!-- =====================================================
-                     Spieluhr + GK-Button
-                     =================================================== -->
-            <div class="timer-container">
-              <!-- ===================== Spieluhr ==================== -->
-              <div class="timer">
-                <div class="timer-label">Zeit</div>
-
-                <!-- Clock-Bar mit ±-Buttons (±10 / ±1Sek.) -->
-                <div class="clock-bar">
-                  <button
-                    aria-label="-10 Sekunden"
-                    class="clock-btn"
-                    id="rewind-fast-btn"
-                  >
-                    «
-                  </button>
-                  <button
-                    aria-label="-1 Sekunde"
-                    class="clock-btn"
-                    id="rewind-btn"
-                  >
-                    ‹
-                  </button>
-
-                  <span class="clock-time" id="game-time">00:00</span>
-
-                  <button
-                    aria-label="+1 Sekunde"
-                    class="clock-btn"
-                    id="forward-btn"
-                  >
-                    ›
-                  </button>
-                  <button
-                    aria-label="+10 Sekunden"
-                    class="clock-btn"
-                    id="forward-fast-btn"
-                  >
-                    »
-                  </button>
+            <!-- rechte Spalte: App-Titel + Match-Infos + Timer/GK/Score -->
+            <div class="title-col">
+                <!-- Match-Tabelle (wird von header.js gefüllt) -->
+                <div class="match-information">
+                    <div id="information-container"></div>
                 </div>
 
-                <!-- Start / Pause / Reset -->
-                <div class="timer-controls">
-                  <button id="start-pause-btn">Start</button>
-                  <button id="reset-btn">Reset</button>
-                </div>
-              </div>
+                <!-- =====================================================
+                         Spieluhr + GK-Button
+                         =================================================== -->
+                <div class="timer-container">
+                    <!-- ===================== Spieluhr ==================== -->
+                    <div class="timer">
+                        <!-- Clock-Bar mit ±-Buttons (±10 / ±1Sek.) -->
+                        <div class="clock-bar">
+                            <button
+                                    aria-label="-10 Sekunden"
+                                    class="clock-btn"
+                                    id="rewind-fast-btn"
+                            >
+                                «
+                            </button>
+                            <button
+                                    aria-label="-1 Sekunde"
+                                    class="clock-btn"
+                                    id="rewind-btn"
+                            >
+                                ‹
+                            </button>
 
-              <!-- ===================== GK-Toggle =================== -->
-              <div class="timer">
-                <div class="timer-label">Torwart</div>
-                <button class="goalkeeper-button" id="change-goalkeeper-btn">
-                  TW1
-                </button>
-              </div>
+                            <span class="clock-time" id="game-time">00:00</span>
+
+                            <button
+                                    aria-label="+1 Sekunde"
+                                    class="clock-btn"
+                                    id="forward-btn"
+                            >
+                                ›
+                            </button>
+                            <button
+                                    aria-label="+10 Sekunden"
+                                    class="clock-btn"
+                                    id="forward-fast-btn"
+                            >
+                                »
+                            </button>
+                        </div>
+
+                        <!-- Start / Pause / Reset -->
+                        <div class="timer-controls">
+                            <button id="start-pause-btn">Start</button>
+                            <button id="reset-btn">Reset</button>
+                        </div>
+                    </div>
+
+                    <!-- ===================== GK-Toggle =================== -->
+                    <div class="timer">
+                        <div class="timer-label">Torwart</div>
+                        <button class="goalkeeper-button" id="change-goalkeeper-btn">
+                            TW1
+                        </button>
+                    </div>
+                </div>
             </div>
-          </div>
         </div>
-      </header>
+    </header>
 
-      <!-- =========================================================
-         HAUPTBEREICH – Erfassung & Statistiken
-         ========================================================= -->
-      <main class="main-content">
+    <!-- =========================================================
+       HAUPTBEREICH – Erfassung & Statistiken
+       ========================================================= -->
+    <main class="main-content">
         <!-- -----------------------------------------------------
              1)  Wurf-Erfassung
              --------------------------------------------------- -->
         <section class="tracking-section">
-          <!-- Kopfzeile: Titel, Legende, Show-Lines-Toggle -->
-          <div class="tracking-header">
-            <h2><!-- wird von app.js gesetzt --></h2>
+            <!-- Kopfzeile: Titel, Legende, Show-Lines-Toggle -->
+            <div class="tracking-header">
+                <h2><!-- wird von app.js gesetzt --></h2>
 
-            <div class="tracking-tools">
-              <!-- Kleine Legende ----------------------- -->
-              <div class="legend">
-                <span class="legend-dot" style="background: #888"></span>
-                Shot-Position
-                <span class="legend-dot" style="background: #ff0000"></span> Tor
-                <span class="legend-dot" style="background: #00b050"></span>
-                Gehalten
-              </div>
-              <!-- Umschalter Verbindungslinien --------- -->
-              <div class="visualization-options">
-                <div class="toggle-container">
-                  <span class="toggle-label">Lines</span>
-                  <label class="toggle-switch">
-                    <input id="show-lines-toggle" type="checkbox" />
-                    <span class="slider round"></span>
-                  </label>
-                </div>
-              </div>
+                <div class="tracking-tools">
+                    <!-- Kleine Legende ----------------------- -->
+                    <div class="legend">
+                        <span class="legend-dot" style="background: #888"></span>
+                        Shot-Position
+                        <span class="legend-dot" style="background: #ff0000"></span> Tor
+                        <span class="legend-dot" style="background: #00b050"></span>
+                        Gehalten
+                    </div>
+                    <!-- Umschalter Verbindungslinien --------- -->
+                    <div class="visualization-options">
+                        <div class="toggle-container">
+                            <span class="toggle-label">Lines</span>
+                            <label class="toggle-switch">
+                                <input id="show-lines-toggle" type="checkbox"/>
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
 
-              <!-- Block 1: Ass-Kontrolle -->
-              <div class="ass-control">
-                <button id="ass-decrement">-</button>
+                    <!-- Block 1: Ass-Kontrolle -->
+                    <div class="ass-control">
+                        <button id="ass-decrement">-</button>
 
-                <div
-                  style="
+                        <div
+                                style="
                     display: flex;
                     flex-direction: column;
                     align-items: center;
                   "
-                >
-                  <span class="counter-label">Ass</span>
-                  <span class="counter-value" id="ass-value"></span>
-                </div>
+                        >
+                            <span class="counter-label">Ass</span>
+                            <span class="counter-value" id="ass-value"></span>
+                        </div>
 
-                <button id="ass-increment">+</button>
-              </div>
+                        <button id="ass-increment">+</button>
+                    </div>
 
-              <!-- Block 3: Tor-Kontrolle -->
-              <div class="tor-control">
-                <button id="tor-decrement">-</button>
+                    <!-- Block 3: Tor-Kontrolle -->
+                    <div class="tor-control">
+                        <button id="tor-decrement">-</button>
 
-                <div
-                  style="
+                        <div
+                                style="
                     display: flex;
                     flex-direction: column;
                     align-items: center;
                   "
-                >
-                  <span class="counter-label">Tor</span>
-                  <span class="counter-value" id="tor-value"></span>
-                </div>
+                        >
+                            <span class="counter-label">Tor</span>
+                            <span class="counter-value" id="tor-value"></span>
+                        </div>
 
-                <button id="tor-increment">+</button>
-              </div>
+                        <button id="tor-increment">+</button>
+                    </div>
 
-              <!-- Block 2: 7g6-Kontrolle -->
-              <div class="seven-g6-control">
-                <button id="seven-g6-decrement">-</button>
+                    <!-- Block 2: 7g6-Kontrolle -->
+                    <div class="seven-g6-control">
+                        <button id="seven-g6-decrement">-</button>
 
-                <div
-                  style="
+                        <div
+                                style="
                     display: flex;
                     flex-direction: column;
                     align-items: center;
                   "
-                >
-                  <span class="counter-label">7g6</span>
-                  <span class="counter-value" id="seven-g6-value"></span>
-                </div>
+                        >
+                            <span class="counter-label">7g6</span>
+                            <span class="counter-value" id="seven-g6-value"></span>
+                        </div>
 
-                <button id="seven-g6-increment">+</button>
-              </div>
+                        <button id="seven-g6-increment">+</button>
+                    </div>
 
-              <!-- Block 4: Techniche-Fehler-Kontrolle -->
-              <div class="ass-control">
-                <button id="tf-decrement">-</button>
+                    <!-- Block 4: Techniche-Fehler-Kontrolle -->
+                    <div class="ass-control">
+                        <button id="tf-decrement">-</button>
 
-                <div
-                  style="
+                        <div
+                                style="
                     display: flex;
                     flex-direction: column;
                     align-items: center;
                   "
-                >
-                  <span class="counter-label">TF</span>
-                  <span class="counter-value" id="tf-value"></span>
+                        >
+                            <span class="counter-label">TF</span>
+                            <span class="counter-value" id="tf-value"></span>
+                        </div>
+
+                        <button id="tf-increment">+</button>
+                    </div>
                 </div>
-
-                <button id="tf-increment">+</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Voll-Statistik-Tabelle für Keeper ----------------------- -->
-          <div class="gk-stat-wrapper">
-            <table class="gk-stat-table" id="gk-stat-table">
-              <thead>
-                <tr>
-                  <!-- linke Hälfte -------------------------------- -->
-                  <th rowspan="2">Name</th>
-                  <th rowspan="2">Spielzeit</th>
-                  <th rowspan="2" title="Paraden">P</th>
-                  <th colspan="11">Paraden&nbsp;je&nbsp;Wurfart</th>
-                  <th rowspan="2" title="Assists pro Tor">Ass</th>
-                  <th class="tor-head" rowspan="2" title="geworfene Tore">
-                    Tor
-                  </th>
-
-                  <th class="divider-col" rowspan="2"></th>
-
-                  <!-- rechte Hälfte ------------------------------- -->
-                  <th class="gk-total-goals" rowspan="2">T</th>
-                  <th colspan="9">Tore&nbsp;je&nbsp;Wurfart</th>
-                  <th rowspan="2">GS</th>
-                  <th rowspan="2">7m</th>
-                  <th rowspan="2">7g6</th>
-                  <th rowspan="2">TF</th>
-                  <th rowspan="2">Ges.</th>
-                  <th rowspan="2">%</th>
-                </tr>
-                <tr>
-                  <!-- Unterzeile Paraden -->
-                  <th>RL</th>
-                  <th>RM</th>
-                  <th>RR</th>
-                  <th>K</th>
-                  <th>LA</th>
-                  <th>RA</th>
-                  <th>DL</th>
-                  <th>DM</th>
-                  <th>DR</th>
-                  <th>GS</th>
-                  <th>7m</th>
-                  <!-- Unterzeile Gegentore -->
-                  <th>RL</th>
-                  <th>RM</th>
-                  <th>RR</th>
-                  <th>K</th>
-                  <th>LA</th>
-                  <th>RA</th>
-                  <th>DL</th>
-                  <th>DM</th>
-                  <th>DR</th>
-                </tr>
-              </thead>
-              <tbody>
-                <!-- wird per JS befüllt -->
-              </tbody>
-            </table>
-          </div>
-
-          <!-- ------------- 2-spaltiges Grid (Feld | Tabelle) -------- -->
-          <div class="tracking-grid">
-            <!-- a) Spielfeld -------------------------------------- -->
-            <div class="field-col debug-col">
-              <div class="background-container">
-                <!-- Action-Buttons auf dem Feld -->
-                <div class="action-buttons">
-                  <button class="action-btn goal-btn" id="goal-btn">Tor</button>
-                  <button
-                    class="action-btn goalkeeper-btn"
-                    id="goalkeeper-save-btn"
-                  >
-                    Gehalten
-                  </button>
-                  <button class="action-btn cancel-btn" id="cancel-btn">
-                    Abbrechen
-                  </button>
-                  <button class="action-btn undo-btn" disabled id="undo-btn">
-                    Rückgängig
-                  </button>
-                </div>
-
-                <!-- Image + Canvas -->
-                <div class="canvas-container">
-                  <img
-                    alt="Handball Court"
-                    id="background-image"
-                    src="./src/images/goal-background.png"
-                  />
-                  <div id="canvas-overlay">
-                    <canvas id="court-canvas"></canvas>
-                  </div>
-                </div>
-              </div>
             </div>
 
-            <!-- b) Shot-Tabelle (rechte Spalte) ------------------- -->
-            <aside class="table-col debug-col" id="shot-table-container">
-              <!-- wird via JavaScript gefüllt -->
-            </aside>
-            <div class="disabled-field">
-              <div class="gk-overview-container">
-                <div class="gk-names-container">
-                  <div>
-                    <h3>Torwart 1: Miroslavljev</h3>
-                    <h3>Torwart 2: Ludwig</h3>
-                  </div>
-                  <div class="gk-overview-btn-container">
-                    <button class="gk-overview-toggle-btn">Torwart 1</button>
-                  </div>
+            <!-- Voll-Statistik-Tabelle für Keeper ----------------------- -->
+            <div class="gk-stat-wrapper">
+                <table class="gk-stat-table" id="gk-stat-table">
+                    <thead>
+                    <tr>
+                        <!-- linke Hälfte -------------------------------- -->
+                        <th rowspan="2">Name</th>
+                        <th rowspan="2">Spielzeit</th>
+                        <th rowspan="2" title="Paraden">P</th>
+                        <th colspan="11">Paraden&nbsp;je&nbsp;Wurfart</th>
+                        <th rowspan="2" title="Assists pro Tor">Ass</th>
+                        <th class="tor-head" rowspan="2" title="geworfene Tore">
+                            Tor
+                        </th>
+
+                        <th class="divider-col" rowspan="2"></th>
+
+                        <!-- rechte Hälfte ------------------------------- -->
+                        <th class="gk-total-goals" rowspan="2">T</th>
+                        <th colspan="9">Tore&nbsp;je&nbsp;Wurfart</th>
+                        <th rowspan="2">GS</th>
+                        <th rowspan="2">7m</th>
+                        <th rowspan="2">7g6</th>
+                        <th rowspan="2">TF</th>
+                        <th rowspan="2">Ges.</th>
+                        <th rowspan="2">%</th>
+                    </tr>
+                    <tr>
+                        <!-- Unterzeile Paraden -->
+                        <th>RL</th>
+                        <th>RM</th>
+                        <th>RR</th>
+                        <th>K</th>
+                        <th>LA</th>
+                        <th>RA</th>
+                        <th>DL</th>
+                        <th>DM</th>
+                        <th>DR</th>
+                        <th>GS</th>
+                        <th>7m</th>
+                        <!-- Unterzeile Gegentore -->
+                        <th>RL</th>
+                        <th>RM</th>
+                        <th>RR</th>
+                        <th>K</th>
+                        <th>LA</th>
+                        <th>RA</th>
+                        <th>DL</th>
+                        <th>DM</th>
+                        <th>DR</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <!-- wird per JS befüllt -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- ------------- 2-spaltiges Grid (Feld | Tabelle) -------- -->
+            <div class="tracking-grid">
+                <!-- a) Spielfeld -------------------------------------- -->
+                <div class="field-col debug-col">
+                    <div class="background-container">
+                        <!-- Action-Buttons auf dem Feld -->
+                        <div class="action-buttons">
+                            <button class="action-btn goal-btn" id="goal-btn">Tor</button>
+                            <button
+                                    class="action-btn goalkeeper-btn"
+                                    id="goalkeeper-save-btn"
+                            >
+                                Gehalten
+                            </button>
+                            <button class="action-btn cancel-btn" id="cancel-btn">
+                                Abbrechen
+                            </button>
+                            <button class="action-btn undo-btn" disabled id="undo-btn">
+                                Rückgängig
+                            </button>
+                        </div>
+
+                        <!-- Image + Canvas -->
+                        <div class="canvas-container">
+                            <img
+                                    alt="Handball Court"
+                                    id="background-image"
+                                    src="./src/images/goal-background.png"
+                            />
+                            <div id="canvas-overlay">
+                                <canvas id="court-canvas"></canvas>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-  
-                <!-- ========================== GK-OVERVIEW POSITIONS BUTTONS ========================== -->
-                <div class="gk-overview-positions-btns-container">
-                  <button class="gk-overview-action-btn">RA</button>
-                  <button class="gk-overview-action-btn">LA</button>
-                  <button class="gk-overview-action-btn">RL</button>
-                  <button class="gk-overview-action-btn">RM</button>
-                  <button class="gk-overview-action-btn">RR</button>
-                  <button class="gk-overview-action-btn">KM</button>
-                  <button class="gk-overview-action-btn">DB</button>
-                  <button class="gk-overview-action-btn">7m</button>
-                </div>
-                <!-- ========================== GK-OVERVIEW ACTION BUTTONS ========================== -->
-  
-                <div class="gk-overview-table">
-                  <div class="gk-overview-action-btns-container">
-                    <button class="action-btn goal-btn" id="goal-btn">Tor</button>
-                    <button
-                      class="action-btn goalkeeper-btn"
-                      id="goalkeeper-save-btn"
-                    >
-                      Gehalten
-                    </button>
-                    <button class="action-btn cancel-btn" id="cancel-btn">
-                      Abbrechen
-                    </button>
-                    <button class="action-btn undo-btn" disabled id="undo-btn">
-                      Rückgängig
-                    </button>
-                  </div>
-                  <aside
-                    class="table-col debug-col"
-                    id="gk-overview-table-container"
-                  >
+
+                <!-- b) Shot-Tabelle (rechte Spalte) ------------------- -->
+                <aside class="table-col debug-col" id="shot-table-container">
                     <!-- wird via JavaScript gefüllt -->
-                  </aside>
+                </aside>
+
+                <div class="gk-overview-container">
+                    <div class="gk-names-container">
+                        <div>
+                            <h3>Torwart 1: Miroslavljev</h3>
+                            <h3>Torwart 2: Ludwig</h3>
+                        </div>
+                        <div class="gk-overview-btn-container">
+                            <button class="gk-overview-toggle-btn">Torwart 1</button>
+                        </div>
+                    </div>
+
+                    <!-- ========================== GK-OVERVIEW POSITIONS BUTTONS ========================== -->
+                    <div class="gk-overview-positions-btns-container">
+                        <button class="gk-overview-action-btn">RA</button>
+                        <button class="gk-overview-action-btn">LA</button>
+                        <button class="gk-overview-action-btn">RL</button>
+                        <button class="gk-overview-action-btn">RM</button>
+                        <button class="gk-overview-action-btn">RR</button>
+                        <button class="gk-overview-action-btn">KM</button>
+                        <button class="gk-overview-action-btn">DB</button>
+                        <button class="gk-overview-action-btn">7m</button>
+                    </div>
+                    <!-- ========================== GK-OVERVIEW ACTION BUTTONS ========================== -->
+
+                    <div class="gk-overview-table">
+
+                        <div class="gk-overview-action-btns-container">
+                            <button class="action-btn goal-btn" id="goal-btn-rival">Tor</button>
+                            <button
+                                    class="action-btn goalkeeper-btn"
+                                    id="goalkeeper-save-btn-rival"
+                            >
+                                Gehalten
+                            </button>
+                            <button class="action-btn cancel-btn" id="cancel-btn-rival">
+                                Abbrechen
+                            </button>
+                            <button class="action-btn undo-btn" disabled id="undo-btn-rival">
+                                Rückgängig
+                            </button>
+                        </div>
+                        <aside
+                                class="table-col debug-col"
+                                id="gk-overview-rival-table"
+                        >
+                            <!-- wird via JavaScript gefüllt -->
+                        </aside>
+                    </div>
                 </div>
-              </div>
             </div>
-          </div>
         </section>
 
         <!-- =========================================================
         Globale Aktionen
         ========================================================= -->
         <div class="control-panel">
-          <button class="clear-all-button" id="clear-btn">Clear All</button>
-          <button class="control-btn" disabled id="export-btn">Export</button>
+            <button class="clear-all-button" id="clear-btn">Clear All</button>
+            <button class="control-btn" disabled id="export-btn">Export</button>
         </div>
 
         <!-- ---------------------------------------------------------
              2)  Statistik-Tabs
              ------------------------------------------------------- -->
-       <div class="disabled-field">
-         <section class="stats-section">
-           <h2 id="stats-heading">Shot Statistics – Goalkeeper 1</h2>
- 
-           <!-- Tabs -->
-           <div class="stats-tabs">
-             <button class="tab-btn active" data-editor="shot">
-               Shot Positions
-             </button>
-             <button class="tab-btn" data-editor="goal">Goal Areas</button>
-             <button class="tab-btn" data-editor="none">Combinations</button>
-             <button class="tab-btn" data-editor="none">Edit Areas</button>
-           </div>
- 
-           <!-- Tab-Inhalte -->
-           <div class="stats-content">
-             <div class="tab-content active" id="shot-positions-content">
-               <div class="stats-grid" id="shot-positions-stats"></div>
-             </div>
- 
-             <div class="tab-content" id="goal-areas-content">
-               <div class="stats-grid" id="goal-areas-stats"></div>
-             </div>
- 
-             <div class="tab-content" id="combinations-content">
-               <table id="combinations-stats">
-                 <thead>
-                   <tr>
-                     <th>Shot Area</th>
-                     <th>Goal Area</th>
-                     <th>Count</th>
-                     <th>Percentage</th>
-                   </tr>
-                 </thead>
-                 <tbody></tbody>
-               </table>
-             </div>
- 
-             <div class="tab-content" id="areas-editor-content">
-               <!-- Area-Editor wird dynamisch gerendert -->
-             </div>
-           </div>
-         </section>
-       </div>      
-      </main>
-    </div>
+        <section class="stats-section" hidden>
+            <h2 id="stats-heading">Shot Statistics – Goalkeeper 1</h2>
 
-    <!--  idb global (muss VOR app.js geladen sein) -->
-    <script src="./src/js/lib/idb-umd.js"></script>
+            <!-- Statistik-Tabs werden aktuell nicht benötigt.
+                 Durch das hidden-Attribut bleiben alle Elemente im DOM,
+                 können später also ohne weiteres Re-Styling wieder aktiviert
+                 werden (einfach Attribut entfernen). -->
 
-    <!-- Haupt-Modul -->
-    <script src="./src/js/app.js" type="module"></script>
-  </body>
+            <!-- Tabs -->
+            <div class="stats-tabs">
+                <button class="tab-btn active" data-editor="shot">
+                    Shot Positions
+                </button>
+                <button class="tab-btn" data-editor="goal">Goal Areas</button>
+                <button class="tab-btn" data-editor="none">Combinations</button>
+                <button class="tab-btn" data-editor="none">Edit Areas</button>
+            </div>
+
+            <!-- Tab-Inhalte -->
+            <div class="stats-content">
+                <div class="tab-content active" id="shot-positions-content">
+                    <div class="stats-grid" id="shot-positions-stats"></div>
+                </div>
+
+                <div class="tab-content" id="goal-areas-content">
+                    <div class="stats-grid" id="goal-areas-stats"></div>
+                </div>
+
+                <div class="tab-content" id="combinations-content">
+                    <table id="combinations-stats">
+                        <thead>
+                        <tr>
+                            <th>Shot Area</th>
+                            <th>Goal Area</th>
+                            <th>Count</th>
+                            <th>Percentage</th>
+                        </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+
+                <div class="tab-content" id="areas-editor-content">
+                    <!-- Area-Editor wird dynamisch gerendert -->
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<!--  idb global (muss VOR app.js geladen sein) -->
+<script src="./src/js/lib/idb-umd.js"></script>
+
+<!-- Haupt-Modul -->
+<script src="./src/js/app.js" type="module"></script>
+</body>
 </html>

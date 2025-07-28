@@ -150,23 +150,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         return img;
     };
 
-    // --- Gemeinsame Tabelle für Match-Infos + Zusammenfassung
-
+    /*  -----------------------------------------------------------------
+        4-Spalten-Tabelle (Label | Input | Label | Input).
+       -----------------------------------------------------------------*/
     createTable(
         'information-container',
-        [                       //   Label      Input  (2‑spaltig)
-            ['Team',        teamInput],
-            ['Wettbewerb',  competitionInput],
-            ['Datum',       dateInput       ],
-            ['Spielort',    locationInput   ],
-            ['SC Magdeburg -', opponentInput]
-        ],
-        ['25%','75%'],          // zwei Spalten
-        [],                     // keine Col/Row‑Spans mehr nötig
-        [['right','left'],['right','left'],['right','left'],['right','left'],['right','left']],
-        true
-    );
+        [
+            /* 1) Gegner-Zeile ganz nach oben */
+            ['SC Magdeburg -', opponentInput,   'Datum',     dateInput     ],
 
+            /* 2) Team jetzt zweite Zeile */
+            ['Team',          teamInput,        'Spielort',  locationInput ],
+
+            /* 3) Wettbewerb steht darunter (rechte Spalten leer) */
+            ['Wettbewerb',    competitionInput, '',          ''            ]
+        ],
+        ['23%','27%','23%','27%'], // gleichmäßige Breiten
+        [], // keine Row/Col-Spans
+        [ ['right','left','right','left'], // Zeile 1
+            ['right','left','right','left'], // Zeile 2
+            ['right','left','right','left'] ], // Zeile 3
+        true // volle Breite
+    );
 
     // Score-Block direkt rechts neben dem Torwart-Toggle einhängen
     document.querySelector('.timer-container')

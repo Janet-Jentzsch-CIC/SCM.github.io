@@ -11,19 +11,23 @@ import {
     deleteShot,
     getAreas,
     getAss,
-    getSevenG6,
     getCurrentGoalkeeper,
     getGameTimerState,
+    getSevenG6,
     getShots,
     getShowShotLines,
+    getTF,
+    getTor,
     initDB,
     setAreas,
     setAss,
-    setSevenG6,
     setCurrentGoalkeeper,
     setGameTimerState,
     setMatchInfo,
-    setShowShotLines, getTor, setTor, setTF, getTF
+    setSevenG6,
+    setShowShotLines,
+    setTF,
+    setTor
 } from './db.js';
 
 import {
@@ -39,10 +43,12 @@ import {
 const COLOR_TEMP_MARKER = '#888'; // temporärer Marker bei Auswahl GRAU
 const COLOR_GOAL_TOR = '#ff0000'; // Rot für „Tor“
 const COLOR_GOAL_SAVE = '#00b050'; // Grün für Torwart-Parade
+const COLOR_LINES = '#ffd700cc';   // Gelb-Gold, 80 % Deckkraft
+
 let ass = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
 let sevenG6 = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
-let torCount = {1:{1:0,2:0}, 2:{1:0,2:0}};
-let tfCount  = {1:{1:0,2:0}, 2:{1:0,2:0}};
+let torCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
+let tfCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
 
 /* ===== Konstanten & globale Helfer ================================ */
 const FIRST_HALF = 1;
@@ -57,7 +63,7 @@ function currentHalf() {
 /* =====================================================================
  *  Alle Halbzeit-abhängigen Badges & Button-States neu zeichnen
  * ===================================================================*/
-function refreshHalfDependentUI () {
+function refreshHalfDependentUI() {
     updateAssBadge();
     updateSevenG6Badge();
     updateTorBadge();
@@ -82,7 +88,7 @@ function updateAssBadge() {
 }
 
 function updateSevenG6Badge() {
-    const gk   = currentGoalkeeper;
+    const gk = currentGoalkeeper;
     const half = currentHalf();
 
     document.querySelector('#seven-g6-value').innerHTML =
@@ -94,7 +100,7 @@ function updateSevenG6Badge() {
 }
 
 function updateTorBadge() {
-    const gk   = currentGoalkeeper;
+    const gk = currentGoalkeeper;
     const half = currentHalf();
 
     document.querySelector('#tor-value').innerHTML =
@@ -105,8 +111,8 @@ function updateTorBadge() {
     if (dec) dec.disabled = torCount[gk][half] === 0;
 }
 
-function updateTFBadge () {
-    const gk   = currentGoalkeeper;
+function updateTFBadge() {
+    const gk = currentGoalkeeper;
     const half = currentHalf();
 
     document.querySelector('#tf-value').innerHTML =
@@ -157,6 +163,22 @@ const RIGHT_COL_MAP = {
 let shots = []; // alle Würfe – synchron & unsynchron
 let shotAreas = []; // Liste der Shot-Areas (Wurfzonen)
 let goalAreas = []; // Liste der Goal-Areas (Torzonen)
+
+/* =======  RIVAL GK Tracking  ========================================= */
+let rivalShots = [];                       // Alle Würfe gegnerischer Keeper
+let currentRivalGoalkeeper = 1;            // Start = „Torwart 1“
+let currentRivalPos = null;                // zuletzt geklickte Wurfposition
+
+/* Buttons erst aktivieren, sobald eine Pos. gewählt ist */
+const enableRivalActionBtns = onOff => {
+    ['goal-btn-rival', 'goalkeeper-save-btn-rival',
+        'cancel-btn-rival', 'undo-btn-rival'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = !onOff;
+        el.classList.toggle('active', onOff);
+    });
+};
 
 // --- Caches --------------------
 let shotAreaMap = new Map(); // id → das entsprechende Zonenobjekt
@@ -231,7 +253,7 @@ async function initApp() {
     /* _____ Tor-Zähler ______________________________________________ */
     torCount = await getTor();
     if (!torCount || typeof torCount !== 'object') torCount = {};
-    for (const gk of [1,2]) {
+    for (const gk of [1, 2]) {
         torCount[gk] ??= {};
         torCount[gk][1] = Number(torCount[gk][1] ?? 0);
         torCount[gk][2] = Number(torCount[gk][2] ?? 0);
@@ -246,7 +268,7 @@ async function initApp() {
 
     /* _____ TF-Zähler _____________________________________________________________ */
     tfCount = await getTF();
-    for (const gk of [1,2]) {
+    for (const gk of [1, 2]) {
         tfCount[gk] ??= {};
         tfCount[gk][1] = Number(tfCount[gk][1] ?? 0);
         tfCount[gk][2] = Number(tfCount[gk][2] ?? 0);
@@ -302,7 +324,9 @@ async function initApp() {
     /* init Shot-Tabelle */
     renderShotTable();
     /** init GK-overview table */
-    renderGkOverviewTable()
+    //renderGkOverviewTable();
+    renderRivalShotTable();
+    enableRivalActionBtns(false);
 }
 
 // == 4. Canvas-Initialisierung =========================================
@@ -397,7 +421,143 @@ function setupEventListeners() {
 
     /* Torwart-Toggle initialisieren */
     changeGoalkeeper().catch(err => console.error('[GK] Fehler:', err));
+
+
+    /* --------------------------------------------------
+     *  RIVAL – Positions- & Action-Buttons
+     * -------------------------------------------------- */
+    const rivalPosBtns = document
+        .querySelectorAll('.gk-overview-positions-btns-container .gk-overview-action-btn');
+
+    rivalPosBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            /* 1 Position merken */
+            currentRivalPos = btn.textContent.trim().toLowerCase();   // 'ra', 'km' …
+
+            /* 2 UI: Aktiv-Highlight */
+            rivalPosBtns.forEach(b => b.classList.toggle('active-pos', b === btn));
+
+            /* 3 Aktion-Buttons freischalten */
+            enableRivalActionBtns(true);
+        });
+    });
+
+    /* Action-Buttons */
+    on('goal-btn-rival', 'click', () => finishRivalShot(false));
+    on('goalkeeper-save-btn-rival', 'click', () => finishRivalShot(true));
+    on('cancel-btn-rival', 'click', resetRivalProcess);
+    on('undo-btn-rival', 'click', undoLastRivalShot);
+
+    /* GK-Toggle (Rival) */
+    const rivalToggle = document.querySelector('.gk-overview-toggle-btn');
+    if (rivalToggle) {
+        rivalToggle.addEventListener('click', () => {
+            currentRivalGoalkeeper = currentRivalGoalkeeper === 1 ? 2 : 1;
+            rivalToggle.textContent = `Torwart ${currentRivalGoalkeeper}`;
+            renderRivalShotTable();              // Tabelle neu
+        });
+    }
+
 }
+
+/* ===================================================================
+ *  RIVAL : Shot fertigstellen
+ * ===================================================================*/
+async function finishRivalShot(isSave) {
+    if (!currentRivalPos) {                   // keine Pos. gewählt
+        showToast('Erst eine Wurfposition wählen!', 'offline');
+        return;
+    }
+
+    const shot = {
+        timestamp: new Date().toISOString(),
+        gameTime: formatTime(gameSeconds),
+        gameMinutesFloor: Math.floor(gameSeconds / 60),
+        gameSeconds,
+        shotCategory: currentRivalPos,        // z.B. 'ra'
+        isGoalkeeperSave: isSave,
+        goalkeeperId: currentRivalGoalkeeper,
+        team: 'rival'                         // <<< einziges Unterscheidungsmerkmal
+    };
+
+    /* sofort persistieren, falls online */
+    if (navigator.onLine) {
+        shot.id = await addShot(shot);        // bestehende DB-API weiter nutzen
+    }
+    shots.push(shot);                       // in globales Array
+    rivalShots.push(shot);                  // separat für schnelle Filterung
+
+    renderRivalShotTable();                 // Mini-Tabelle rechts
+    resetRivalProcess();
+}
+
+
+/* Reset nur für den Workflow des Rivals */
+function resetRivalProcess() {
+    currentRivalPos = null;
+    enableRivalActionBtns(false);
+    document
+        .querySelectorAll('.gk-overview-action-btn')
+        .forEach(b => b.classList.remove('active-pos'));
+}
+
+function undoLastRivalShot() {
+    const last = rivalShots.pop();
+    if (!last) {
+        showToast('Kein Eintrag zum Rückgängigmachen', 'offline');
+        return;
+    }
+    /* auch aus globaler shots-Liste entfernen */
+    const idx = shots.findIndex(s => s.timestamp === last.timestamp);
+    if (idx > -1) shots.splice(idx, 1);
+
+    if (last.id) {               // schon in DB?
+        deleteShot(last.id).catch(() => console.warn('[RIVAL] DB-Undo fehlgeschlagen'));
+    }
+    renderRivalShotTable();
+    showToast('Letzter Rival-Shot zurückgenommen', 'update');
+}
+
+
+function renderRivalShotTable() {
+    /* --------------------------------------------------------------
+       Ziel-Container ► Tabelle für den RIVAL-Keeper
+       (s. index.html → <aside id="gk-overview-rival-table">)
+    -------------------------------------------------------------- */
+    const cont = document.getElementById('gk-overview-rival-table');
+
+    if (!cont) return;
+
+    /* nur Shots des aktuellen RIVAL-Keepers */
+    const rows = shots
+        .filter(s => s.team === 'rival' && (s.goalkeeperId ?? 1) === currentRivalGoalkeeper)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    cont.innerHTML = '';
+    const tbl = document.createElement('table');
+    tbl.className = 'shot-table';
+    tbl.innerHTML = `
+    <thead>
+      <tr><th>#</th><th>Min</th><th>Shot A</th><th>Goal A</th></tr>
+    </thead><tbody></tbody>`;
+    cont.appendChild(tbl);
+
+    const tb = tbl.querySelector('tbody');
+    rows.forEach((s, i) => {
+        const tr = document.createElement('tr');
+        tr.className = s.isGoalkeeperSave ? 'shot-row--save' : 'shot-row--goal';
+        tr.innerHTML = `
+      <td>${rows.length - i}</td>
+      <td>${Math.ceil(s.gameSeconds / 60)}'</td>
+      <td>${s.shotCategory.toUpperCase()}</td>
+      <td>${s.isGoalkeeperSave ? '–' : 'Tor'}</td>`;
+        tb.appendChild(tr);
+    });
+    if (!rows.length) {
+        tb.innerHTML = `<tr><td colspan="4" style="padding:8px;">No shots yet …</td></tr>`;
+    }
+}
+
 
 // == 6. Area-Editor-Setup ==============================================
 function initAreaEditors() {
@@ -555,7 +715,8 @@ function renderShotTable() {
 
     /* 1) Alle Shots des aktiven Keepers in umgekehrter Chronologie */
     const rows = shots
-        .filter(s => (s.goalkeeperId ?? 1) === currentGoalkeeper)
+        .filter(s => s.team !== 'rival' &&
+            (s.goalkeeperId ?? 1) === currentGoalkeeper)
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     /* 2) Leeren + Grundgerüst aufbauen */
@@ -612,12 +773,18 @@ function renderShotTable() {
 }
 
 function renderGkOverviewTable() {
-    const cont = document.getElementById('gk-overview-table-container');
+    /* --------------------------------------------------------------
+       Neuer Ziel-Container ► Tabelle für den EIGENEN Keeper
+       (s. index.html → <aside id="gk-overview-own-table">)
+    -------------------------------------------------------------- */
+    const cont = document.getElementById('gk-overview-own-table');
+
     if (!cont) return;
 
     /* 1) Alle Shots des aktiven Keepers in umgekehrter Chronologie */
     const rows = shots
-        .filter(s => (s.goalkeeperId ?? 1) === currentGoalkeeper)
+        .filter(s => s.team !== 'rival' &&
+            (s.goalkeeperId ?? 1) === currentGoalkeeper)
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     /* 2) Leeren + Grundgerüst aufbauen */
@@ -829,7 +996,7 @@ async function finishShot(gkSave = false) {
     shots.push(shot);
     updateStatistics();
     renderShotTable();
-    renderGkOverviewTable()
+    // renderGkOverviewTable()
     renderGKStatTable();
     resetRegistrationProcess();
 }
@@ -889,6 +1056,7 @@ function drawAreas() {
         ctx.save();
         ctx.fillStyle = area.color + '22';
         ctx.strokeStyle = area.color;
+
         ctx.lineWidth = 3;
         ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
@@ -903,11 +1071,18 @@ function drawAreas() {
     }
 
     /* 3) Verbindungslinien (falls aktiviert) – nur für akt. GK */
-    const visibleShots = shots.filter(s => (s.goalkeeperId ?? 1) === currentGoalkeeper);
+    // const visibleShots = shots.filter(s => (s.goalkeeperId ?? 1) === currentGoalkeeper);
+
+    const visibleShots = shots
+
+        // .filter(s => s.team!=='rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper);
+
+        .filter(s => s.team !== 'rival' &&
+            (s.goalkeeperId ?? 1) === currentGoalkeeper)
 
     if (showShotLines) {
         ctx.save();
-        ctx.strokeStyle = '#ffffffcc';
+        ctx.strokeStyle = COLOR_LINES;
         ctx.lineWidth = 1;
         visibleShots.forEach(s => {
             const start = relToCanvas(s.exactShotPos.x, s.exactShotPos.y, canvas);
@@ -953,9 +1128,10 @@ function drawAreas() {
  */
 function updateStatistics() {
     /* ---- 1) Relevante Würfe für aktuellen Torwart vorfiltern ------ */
-    const relevantShots = shots.filter(
-        s => (s.goalkeeperId ?? 1) === currentGoalkeeper // Fallback=1
-    );
+    const relevantShots = shots
+        .filter(s => s.team !== 'rival' &&
+            (s.goalkeeperId ?? 1) === currentGoalkeeper // Fallback=1
+        );
 
     /* ---- 2) UI-Container für Shot- und Goal-Stats holen ----------- */
     const shotContainer = document.getElementById('shot-positions-stats');
@@ -1115,11 +1291,13 @@ async function handleConnectionChange() {
             /* 3) UI refreshen (IDs sind gesetzt) */
             updateStatistics();
             renderShotTable();
-            renderGkOverviewTable()
+            // renderGkOverviewTable()
             renderGKStatTable();
             drawAreas();
             showToast('Offline-Daten synchronisiert ✓', 'update');
             updateButtonStates();
+            renderRivalShotTable();
+            enableRivalActionBtns(false);
         }
     } else {
         showToast('Keine Internet-Verbindung', 'offline');
@@ -1142,7 +1320,9 @@ async function autoFillHalftimeScore() {
 
     /* 2) Gegentore bis 30:00 addieren (Tor = !isGoalkeeperSave) */
     const conceded = shots.filter(
-        s => !s.isGoalkeeperSave && s.gameSeconds < HALF_LENGTH
+        s => s.team !== 'rival' &&
+            !s.isGoalkeeperSave &&
+            s.gameSeconds < HALF_LENGTH
     ).length;
 
     /* 3) Wert eintragen + persistent speichern */
@@ -1166,7 +1346,9 @@ async function autoFillFulltimeScore() {
     if (!ftInput || ftInput.value.trim() !== '') return;
 
     // gesamte Gegentore (Tor = !isGoalkeeperSave) in 60 min
-    const conceded = shots.filter(s => !s.isGoalkeeperSave).length;
+    const conceded = shots.filter(
+        s => s.team !== 'rival' && !s.isGoalkeeperSave
+    ).length;
 
     ftInput.value = String(conceded);
     try {
@@ -1247,7 +1429,7 @@ async function resetSevenG6Counters() {
 }
 
 async function resetTorCounters() {
-    torCount = {1:{1:0,2:0}, 2:{1:0,2:0}};
+    torCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
     await setTor(torCount);
     updateTorBadge();
     renderGKStatTable();
@@ -1255,12 +1437,13 @@ async function resetTorCounters() {
 }
 
 async function resetTFCounters() {
-    tfCount = {1:{1:0,2:0}, 2:{1:0,2:0}};
+    tfCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
     await setTF(tfCount);
     updateTFBadge();
     renderGKStatTable();
     document.getElementById('tf-decrement').disabled = true;
 }
+
 // ——— Ende Helper ————————————————————————————————————————————————
 
 /* ---------- Spalten-Layout ---------- */
@@ -1270,8 +1453,8 @@ const DIVIDER_IDX = 16; // Trennspalte
 const GOALS_TOTAL_IDX = 17; // Spalte „T“
 const TOTAL_IDX = COLS - 2; // Gesamt
 const PERCENT_IDX = COLS - 1; // %
-const SEVENG6_IDX   = COLS - 4; // 7g6
-const TF_IDX      = COLS - 3; // TF
+const SEVENG6_IDX = COLS - 4; // 7g6
+const TF_IDX = COLS - 3; // TF
 
 const normalize = s => s
     ?.normalize('NFD').replace(/[\u0300-\u036f]/g, '') // ä → a
@@ -1301,6 +1484,7 @@ function renderGKStatTable() {
 
     /* ---- 2) Shots auswerten & in passende Zeile schreiben --------- */
     shots.forEach(sh => {
+        if (sh.team === 'rival') return; // fremde Keeper ignorieren
         const gk = sh.goalkeeperId ?? 1;
         const half = sh.gameSeconds < HALF_LENGTH ? 1 : 2; // 30-Min-Grenze
         const key = `${gk}-${half}`;
@@ -1439,13 +1623,18 @@ async function clearAllData(silent = false) {
     if (!silent && !confirm('Wirklich ALLE Würfe löschen?')) return;
 
     // ── Runtime-Arrays & UI ───────────────────────
-    shots = []; // einzige Quelle leeren
+    shots = [];
+    rivalShots = [];
 
     updateStatistics();
     renderShotTable();
-    renderGkOverviewTable()
+    // renderGkOverviewTable()
     renderGKStatTable(); // Tabelle leeren
     drawAreas();
+
+    /* --- Rival-Tabelle & Buttons zurücksetzen ----------- */
+    renderRivalShotTable();
+    enableRivalActionBtns(false);
 
     // ── IndexedDB Store leeren ────────────────────
     try {
@@ -1469,7 +1658,8 @@ async function clearAllData(silent = false) {
  */
 async function hardResetGame() {
     /* 1) Alle Shots & Statistik zurücksetzen */
-    await clearAllData(true); // silent-Mode
+    await clearAllData(true);
+    rivalShots = [];
     renderGKStatTable();
 
     /* 1a) Ass-Zähler wieder auf 0 setzen */
@@ -1554,7 +1744,7 @@ async function changeGoalkeeper() {
     updateStatsHeading();
     updateStatistics();
     renderShotTable();
-    renderGkOverviewTable()
+    // renderGkOverviewTable()
     drawAreas();
     renderGKStatTable();
 
@@ -1596,11 +1786,26 @@ function updateGoalkeeperButton() {
 }
 
 async function undoLastShot() {
-    if (!shots.length) {
+    /* -----------------------------------------------------------------
+        1. Früh-Exit, falls überhaupt keine Würfe vorliegen
+        (verhindert TypeError bei shots.pop() → undefined.id)
+------------------------------------------------------------------*/
+    if (shots.length === 0) {
         showToast('Keine Shots zum Rückgängigmachen', 'offline');
         return;
     }
-    // shots.pop();
+
+    /* -----------------------------------------------------------------
+       2. Letzter Eintrag gehört dem Gegner? → Hinweis & Abbruch
+    ------------------------------------------------------------------*/
+    if (shots.at(-1)?.team === 'rival') {
+        showToast(
+            'Letzter Wurf = Gegner – Undo rechts benutzen.',
+            'offline'
+        );
+        return;
+    }
+
     const last = shots.pop(); // RAM
     if (last.id) { // bereits in DB → löschen
         try {
@@ -1609,10 +1814,11 @@ async function undoLastShot() {
             console.warn('[Undo] DB-Delete fehlgeschlagen');
         }
     }
+
     /* Offline-Shots (id undefined) sind damit einfach aus dem Array entfernt. */
     updateStatistics();
     renderShotTable();
-    renderGkOverviewTable()
+    // renderGkOverviewTable()
     renderGKStatTable();
     drawAreas();
     showToast('Letzter Shot zurückgenommen', 'update');
@@ -1777,7 +1983,7 @@ async function changeAss(delta) {
  * @param {number} delta – Änderungsschritt: z.B. +1 oder -1
  */
 async function changeSevenG6(delta) {
-    const gk   = currentGoalkeeper;
+    const gk = currentGoalkeeper;
     const half = currentHalf();
 
     if (delta < 0 && sevenG6[gk][half] === 0) return;
@@ -1795,7 +2001,7 @@ async function changeSevenG6(delta) {
 }
 
 async function changeTor(delta) {
-    const gk   = currentGoalkeeper;
+    const gk = currentGoalkeeper;
     const half = currentHalf();
 
     if (delta < 0 && torCount[gk][half] === 0) return;
@@ -1807,13 +2013,13 @@ async function changeTor(delta) {
 
     /* Tabellen-Zelle updaten */
     const td = document.querySelector(
-        `#gk-stat-table tbody tr[data-key="${gk}-${half}"] td:nth-child(${TOR_HEAD_IDX+1})`
+        `#gk-stat-table tbody tr[data-key="${gk}-${half}"] td:nth-child(${TOR_HEAD_IDX + 1})`
     );
     if (td) td.textContent = torCount[gk][half] === 0 ? '' : String(torCount[gk][half]);
 }
 
 async function changeTF(delta) {
-    const gk   = currentGoalkeeper;
+    const gk = currentGoalkeeper;
     const half = currentHalf();
 
     if (delta < 0 && tfCount[gk][half] === 0) return;
