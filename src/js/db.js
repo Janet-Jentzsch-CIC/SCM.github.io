@@ -125,12 +125,13 @@ const DEFAULT_GOAL_AREAS = [
 
 /* ==== 3. Datenbank-Konstanten ============================================ */
 const DB_NAME = 'handball-tracker';
-const DB_VERSION = 12; // DB Version
+const DB_VERSION = 13; // DB Version
 
 /* ==== Rest der Logik ============================================ */
 
 const STORE_SHOTS = 'shots';
 const STORE_AREAS = 'areas';
+const RIVAL_GK_KEY = 'currentRivalGoalkeeper';
 const STORE_MATCH = 'matchInfo'; // Store für Match-Informationen
 /*  ────────────────────────────────────────────────────────────────
  *  Ass-Zähler: wir verwenden – wie schon bei Show-Lines, Timer usw. –
@@ -192,14 +193,17 @@ export async function initDB() {
                 const miStore = db.createObjectStore(
                     STORE_MATCH,
                     {keyPath: 'id'}
+
+
+
                 );
-                ['competition', 'date', 'location',
+                ['competition', 'team', 'date', 'location',
                     'opponent', 'halftime', 'fulltime']
                     .forEach(key => miStore.put({id: key, value: ''}));
             }
 
             /* 4) Update von älteren DB-Versionen */
-            if (oldVersion < 12) {
+            if (oldVersion < 13) {
 
                 const areasStore = tx.objectStore(STORE_AREAS);
 
@@ -318,6 +322,23 @@ export async function getCurrentGoalkeeper() {
     await tx.done;
     return typeof value === 'number' ? value : 1;
 }
+
+// ----------  Rival-Keeper  ----------
+export async function setCurrentRivalGoalkeeper(id = 1) {
+    const db = await initDB();
+    const tx = db.transaction(STORE_AREAS, 'readwrite');
+    await tx.store.put(id, RIVAL_GK_KEY);
+    await tx.done;
+}
+
+export async function getCurrentRivalGoalkeeper() {
+    const db = await initDB();
+    const tx = db.transaction(STORE_AREAS, 'readonly');
+    const val = await tx.store.get(RIVAL_GK_KEY);
+    await tx.done;
+    return typeof val === 'number' ? val : 1;  // fallback = 1
+}
+
 
 /**
  * Speichert, ob die Verbindungslinien (Show Lines) angezeigt werden sollen.

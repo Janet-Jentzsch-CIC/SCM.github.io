@@ -14,7 +14,7 @@
 // einheitlicher Präfix & scoped Cache-Name
 const BASE_URL = self.registration.scope.replace(/src\/sw\/?$/, '');
 const CACHE_PREFIX = 'handball-tracker';
-const CACHE_VERSION = 'v3.12'; // Bei Upgrades die Version hochziehen
+const CACHE_VERSION = 'v3.13'; // Bei Upgrades die Version hochziehen
 /**
  * Ein eindeutiger Cache-Name pro Deploy-Ort (Origin + Scope).
  * • vermeidet Kollisionen zwischen Dev-/Prod-Builds

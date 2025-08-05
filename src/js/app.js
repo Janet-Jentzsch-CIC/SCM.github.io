@@ -12,6 +12,7 @@ import {
     getAreas,
     getAss,
     getCurrentGoalkeeper,
+    getCurrentRivalGoalkeeper,
     getGameTimerState,
     getSevenG6,
     getShots,
@@ -22,12 +23,13 @@ import {
     setAreas,
     setAss,
     setCurrentGoalkeeper,
+    setCurrentRivalGoalkeeper,
     setGameTimerState,
     setMatchInfo,
     setSevenG6,
     setShowShotLines,
     setTF,
-    setTor
+    setTor,
 } from './db.js';
 
 import {
@@ -40,10 +42,15 @@ import {
 } from './canvasUtils.js';
 
 /* --- 1.1 Farb-Konstanten für die verschiedenen Arten von Markern --- */
-const COLOR_TEMP_MARKER = '#888'; // temporärer Marker bei Auswahl GRAU
-const COLOR_GOAL_TOR = '#ff0000'; // Rot für „Tor“
-const COLOR_GOAL_SAVE = '#00b050'; // Grün für Torwart-Parade
-const COLOR_LINES = '#ffd700cc';   // Gelb-Gold, 80 % Deckkraft
+const COLOR_TEMP_MARKER = '#888';
+const COLOR_GOAL_TOR = '#ff0000';
+const COLOR_GOAL_SAVE = '#00b050';
+
+// Lines
+const COLOR_LINES = '#ffffff';
+const WIDTH_LINES = 1;
+const BLUR_LINES = 2;
+const SHADOW_COLOR = '#0006';
 
 let ass = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
 let sevenG6 = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
@@ -68,6 +75,7 @@ function refreshHalfDependentUI() {
     updateSevenG6Badge();
     updateTorBadge();
     updateTFBadge();
+    renderGKStatTable();
 }
 
 /* =====================================================================
@@ -165,11 +173,11 @@ let shotAreas = []; // Liste der Shot-Areas (Wurfzonen)
 let goalAreas = []; // Liste der Goal-Areas (Torzonen)
 
 /* =======  RIVAL GK Tracking  ========================================= */
-let rivalShots = [];                       // Alle Würfe gegnerischer Keeper
-let currentRivalGoalkeeper = 1;            // Start = „Torwart 1“
-let currentRivalPos = null;                // zuletzt geklickte Wurfposition
+let rivalShots = []; // Alle Würfe gegnerischer Keeper
+let currentRivalGoalkeeper = 1; // Start = „Torwart 1“
+let currentRivalPos = null; // zuletzt geklickte Wurfposition
 
-/* Buttons erst aktivieren, sobald eine Pos. gewählt ist */
+/* Buttons erst aktivieren, sobald eine Position gewählt ist */
 const enableRivalActionBtns = onOff => {
     ['goal-btn-rival', 'goalkeeper-save-btn-rival',
         'cancel-btn-rival', 'undo-btn-rival'].forEach(id => {
@@ -238,6 +246,9 @@ async function initApp() {
     /* 3.1 IndexedDB initialisieren */
     await initDB();
 
+    // 3.1.1
+    currentGoalkeeper = await getCurrentGoalkeeper();
+
     // _____ 7g6-Zähler __________________________________________________________________
     sevenG6 = await getSevenG6();
     if (!sevenG6 || typeof sevenG6 !== 'object') sevenG6 = {};
@@ -304,7 +315,7 @@ async function initApp() {
     showShotLines = await getShowShotLines();
     const checkbox = document.getElementById('show-lines-toggle');
     if (checkbox) checkbox.checked = showShotLines;
-
+    currentRivalGoalkeeper = await getCurrentRivalGoalkeeper();
     setupEventListeners();
     initAreaEditors();
     updateStatistics(); // Zeichnet erstes Stats-Bild, noch ohne Shots
@@ -317,30 +328,26 @@ async function initApp() {
 
     /* 3.5 Service-Worker-Lifecycle */
     initServiceWorkerLifecycle();
-
-    /* Buttons direkt nach dem Laden korrekt initialisieren */
     updateButtonStates();
-
-    /* init Shot-Tabelle */
     renderShotTable();
-    /** init GK-overview table */
-    //renderGkOverviewTable();
-    renderRivalShotTable();
     enableRivalActionBtns(false);
+
+    /* ---- Rival-GK aus IndexedDB laden --------------------------- */
+    const rivalToggle = document.querySelector('.gk-overview-toggle-btn');
+
+    if (rivalToggle) {
+        rivalToggle.textContent = `Torwart ${currentRivalGoalkeeper}`;
+
+    }
+    renderRivalShotTable();
+
 }
 
 // == 4. Canvas-Initialisierung =========================================
 function initCanvas() {
     canvas = document.getElementById('court-canvas');
     ctx = canvas.getContext('2d');
-
-    // TODO
-    // Klick-Handler **hier** anbinden, weil wir das Canvas sicher haben
-    // canvas.addEventListener('click', handleCanvasClick);
-    // Click-Listener wird zentral in setupEventListeners() gebunden
-
     const bg = document.getElementById('background-image');
-    // Falls bg (Bild) bereits geladen: sofort Größe setzen
     bg.complete ? setCanvasSize() : (bg.onload = setCanvasSize);
 
     window.addEventListener('resize', setCanvasSize);
@@ -432,7 +439,7 @@ function setupEventListeners() {
     rivalPosBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             /* 1 Position merken */
-            currentRivalPos = btn.textContent.trim().toLowerCase();   // 'ra', 'km' …
+            currentRivalPos = btn.textContent.trim().toLowerCase(); // 'ra', 'km' …
 
             /* 2 UI: Aktiv-Highlight */
             rivalPosBtns.forEach(b => b.classList.toggle('active-pos', b === btn));
@@ -451,13 +458,17 @@ function setupEventListeners() {
     /* GK-Toggle (Rival) */
     const rivalToggle = document.querySelector('.gk-overview-toggle-btn');
     if (rivalToggle) {
-        rivalToggle.addEventListener('click', () => {
+        rivalToggle.addEventListener('click', async () => {
             currentRivalGoalkeeper = currentRivalGoalkeeper === 1 ? 2 : 1;
             rivalToggle.textContent = `Torwart ${currentRivalGoalkeeper}`;
-            renderRivalShotTable();              // Tabelle neu
+            renderRivalShotTable();
+            try {
+                await setCurrentRivalGoalkeeper(currentRivalGoalkeeper);
+            } catch (e) {
+                console.warn('[RIVAL-GK] persist failed', e);
+            }
         });
     }
-
 }
 
 /* ===================================================================
@@ -474,7 +485,7 @@ async function finishRivalShot(isSave) {
         gameTime: formatTime(gameSeconds),
         gameMinutesFloor: Math.floor(gameSeconds / 60),
         gameSeconds,
-        shotCategory: currentRivalPos,        // z.B. 'ra'
+        shotCategory: currentRivalPos, // z.B. 'ra'
         isGoalkeeperSave: isSave,
         goalkeeperId: currentRivalGoalkeeper,
         team: 'rival'                         // <<< einziges Unterscheidungsmerkmal
@@ -482,15 +493,14 @@ async function finishRivalShot(isSave) {
 
     /* sofort persistieren, falls online */
     if (navigator.onLine) {
-        shot.id = await addShot(shot);        // bestehende DB-API weiter nutzen
+        shot.id = await addShot(shot); // bestehende DB-API weiter nutzen
     }
-    shots.push(shot);                       // in globales Array
-    rivalShots.push(shot);                  // separat für schnelle Filterung
+    shots.push(shot); // in globales Array
+    rivalShots.push(shot); // separat für schnelle Filterung
 
-    renderRivalShotTable();                 // Mini-Tabelle rechts
+    renderRivalShotTable(); // Mini-Tabelle rechts
     resetRivalProcess();
 }
-
 
 /* Reset nur für den Workflow des Rivals */
 function resetRivalProcess() {
@@ -508,16 +518,16 @@ function undoLastRivalShot() {
         return;
     }
     /* auch aus globaler shots-Liste entfernen */
-    const idx = shots.findIndex(s => s.timestamp === last.timestamp);
+    const idx = shots
+        .findIndex(s => s.timestamp === last.timestamp);
     if (idx > -1) shots.splice(idx, 1);
 
-    if (last.id) {               // schon in DB?
+    if (last.id) { // schon in DB?
         deleteShot(last.id).catch(() => console.warn('[RIVAL] DB-Undo fehlgeschlagen'));
     }
     renderRivalShotTable();
     showToast('Letzter Rival-Shot zurückgenommen', 'update');
 }
-
 
 function renderRivalShotTable() {
     /* --------------------------------------------------------------
@@ -557,7 +567,6 @@ function renderRivalShotTable() {
         tb.innerHTML = `<tr><td colspan="4" style="padding:8px;">No shots yet …</td></tr>`;
     }
 }
-
 
 // == 6. Area-Editor-Setup ==============================================
 function initAreaEditors() {
@@ -711,6 +720,7 @@ function makeEmptyStatRow(goalkeeperName, halfLabel = '') {
 
 function renderShotTable() {
     const cont = document.getElementById('shot-table-container');
+
     if (!cont) return;
 
     /* 1) Alle Shots des aktiven Keepers in umgekehrter Chronologie */
@@ -774,7 +784,7 @@ function renderShotTable() {
 
 function renderGkOverviewTable() {
     /* --------------------------------------------------------------
-       Neuer Ziel-Container ► Tabelle für den EIGENEN Keeper
+       Ziel-Container ► Tabelle für den EIGENEN Keeper
        (s. index.html → <aside id="gk-overview-own-table">)
     -------------------------------------------------------------- */
     const cont = document.getElementById('gk-overview-own-table');
@@ -789,6 +799,7 @@ function renderGkOverviewTable() {
 
     /* 2) Leeren + Grundgerüst aufbauen */
     cont.innerHTML = '';
+
     const tbl = document.createElement('table');
     tbl.className = 'shot-table';
     tbl.innerHTML = `
@@ -807,12 +818,6 @@ function renderGkOverviewTable() {
 
     /* 3) Jede Zeile füllen */
     rows.forEach((s, idx) => {
-        /* 1. Den Namen speziell für **diese** Zeile ermitteln */
-        const goalLabel =
-            (s.goalAreaId === DUMMY_GOAL_ID)
-                ? '7m'
-                : (goalAreaMap.get(s.goalAreaId)?.name ?? '–');
-
         // Schnellzugriff auf den Namen der Wurfzone
         const shotName = shotAreaMap.get(s.shotAreaId)?.name ?? '–';
 
@@ -900,8 +905,8 @@ function handleCanvasClick(e) {
 /**
  * Aktualisiert die drei Overlay-Buttons (Tor · Gehalten · Cancel).
  *  • Tor / Gehalten werden erst aktiv, wenn sowohl Shot- als auch Goal-Pos gesetzt sind.
- *  • Cancel wird **nur** aktiv, sobald der Nutzer mit Schritt 1 begonnen hat
- *    (es also etwas gibt, das man überhaupt abbrechen kann).
+ *  • Cancel wird **nur** aktiv, sobald der Nutzer
+ *  mit Schritt 1 begonnen hat (es also etwas gibt, das man überhaupt abbrechen kann).
  */
 function updateButtonStates() {
     const stepReady = currentStep === 2 && !!currentExactGoalPos; // beide Klicks erledigt
@@ -923,8 +928,9 @@ function updateButtonStates() {
 
     /* === 3) Undo – nur aktiv, wenn
         • mindestens 1 fertig erfasster Shot existiert UND
-        • aktuell *kein* Shot-Vorgang läuft (= kein erster Klick)   */
-    const undoReady = shots.length > 0 // es gibt überhaupt noch Shots
+        • aktuell *kein* Shot-Vorgang läuft (= kein erster Klick) */
+    const undoReady = shots
+            .length > 0 // es gibt überhaupt noch Shots
         && !currentShotPosition // kein Vorgang läuft
         && currentStep === 1; // Registrier-Workflow ruht
     // damit bleibt Undo aktiv, solange mindestens noch ein Shot existiert.
@@ -996,7 +1002,6 @@ async function finishShot(gkSave = false) {
     shots.push(shot);
     updateStatistics();
     renderShotTable();
-    // renderGkOverviewTable()
     renderGKStatTable();
     resetRegistrationProcess();
 }
@@ -1071,19 +1076,18 @@ function drawAreas() {
     }
 
     /* 3) Verbindungslinien (falls aktiviert) – nur für akt. GK */
-    // const visibleShots = shots.filter(s => (s.goalkeeperId ?? 1) === currentGoalkeeper);
-
     const visibleShots = shots
-
-        // .filter(s => s.team!=='rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper);
-
         .filter(s => s.team !== 'rival' &&
             (s.goalkeeperId ?? 1) === currentGoalkeeper)
 
     if (showShotLines) {
         ctx.save();
+
         ctx.strokeStyle = COLOR_LINES;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = WIDTH_LINES;         // dicker  WIDTH_LINES
+        ctx.shadowBlur = BLUR_LINES;        // dezente Schattenkante BLUR_LINES
+        ctx.shadowColor = SHADOW_COLOR; // SHADOW_COLOR
+
         visibleShots.forEach(s => {
             const start = relToCanvas(s.exactShotPos.x, s.exactShotPos.y, canvas);
             const end = relToCanvas(s.exactGoalPos.x, s.exactGoalPos.y, canvas);
@@ -1282,7 +1286,8 @@ async function handleConnectionChange() {
         document.querySelector('.toast--offline')?.remove();
 
         // --- 1) Alle **noch nicht** persistierten Shots (id == undefined)
-        const unsynced = shots.filter(s => s.id == null);
+        const unsynced = shots
+            .filter(s => s.id == null);
 
         if (unsynced.length) {
             /* 2) Bulk-Insert – bulkAddShots ergänzt **in-place** die id   */
@@ -1291,7 +1296,6 @@ async function handleConnectionChange() {
             /* 3) UI refreshen (IDs sind gesetzt) */
             updateStatistics();
             renderShotTable();
-            // renderGkOverviewTable()
             renderGKStatTable();
             drawAreas();
             showToast('Offline-Daten synchronisiert ✓', 'update');
@@ -1318,12 +1322,22 @@ async function autoFillHalftimeScore() {
     if (!htInput) return; // Feld existiert (noch) nicht
     if (htInput.value.trim() !== '') return; // Nutzer hat schon etwas eingetragen
 
-    /* 2) Gegentore bis 30:00 addieren (Tor = !isGoalkeeperSave) */
-    const conceded = shots.filter(
-        s => s.team !== 'rival' &&
+    /* 2) Gegentore bis 30:00 addieren
+     *    • reguläre Gegentore aus shots            (!isGoalkeeperSave)
+     *    • 7g6-Tore aus manuellem Zähler (sevenG6)  Spalte „7g6“
+     */
+    const concededShots = shots
+        .filter(s => s.team !== 'rival' &&
             !s.isGoalkeeperSave &&
             s.gameSeconds < HALF_LENGTH
-    ).length;
+        ).length;
+
+    /* 7g6-Tore: Summe beider Keeper für die 1. HZ */
+    const conceded7g6 =
+        (sevenG6[1]?.[1] ?? 0) +
+        (sevenG6[2]?.[1] ?? 0);
+
+    const conceded = concededShots + conceded7g6;
 
     /* 3) Wert eintragen + persistent speichern */
     htInput.value = String(conceded);
@@ -1345,10 +1359,16 @@ async function autoFillFulltimeScore() {
     const ftInput = document.getElementById('fulltime-input');
     if (!ftInput || ftInput.value.trim() !== '') return;
 
-    // gesamte Gegentore (Tor = !isGoalkeeperSave) in 60 min
-    const conceded = shots.filter(
-        s => s.team !== 'rival' && !s.isGoalkeeperSave
-    ).length;
+    /* Gesamte Gegentore (60 min) = reguläre + 7g6 */
+    const concededShots = shots
+        .filter(s => s.team !== 'rival' && !s.isGoalkeeperSave
+        ).length;
+
+    const conceded7g6 =
+        (sevenG6[1]?.[1] ?? 0) + (sevenG6[1]?.[2] ?? 0) +
+        (sevenG6[2]?.[1] ?? 0) + (sevenG6[2]?.[2] ?? 0);
+
+    const conceded = concededShots + conceded7g6;
 
     ftInput.value = String(conceded);
     try {
@@ -1429,10 +1449,13 @@ async function resetSevenG6Counters() {
 }
 
 async function resetTorCounters() {
+
     torCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
     await setTor(torCount);
+
     updateTorBadge();
     renderGKStatTable();
+
     document.getElementById('tor-decrement').disabled = true;
 }
 
@@ -1628,8 +1651,7 @@ async function clearAllData(silent = false) {
 
     updateStatistics();
     renderShotTable();
-    // renderGkOverviewTable()
-    renderGKStatTable(); // Tabelle leeren
+    renderGKStatTable();
     drawAreas();
 
     /* --- Rival-Tabelle & Buttons zurücksetzen ----------- */
@@ -1686,6 +1708,9 @@ async function hardResetGame() {
     /* 4) Torwart wieder auf „1“ stellen */
     currentGoalkeeper = 1;
     await setCurrentGoalkeeper(1);
+
+    currentRivalGoalkeeper = 1;
+    await setCurrentRivalGoalkeeper(1);
 
     updateGoalkeeperButton();
     refreshHalfDependentUI();
@@ -1744,7 +1769,6 @@ async function changeGoalkeeper() {
     updateStatsHeading();
     updateStatistics();
     renderShotTable();
-    // renderGkOverviewTable()
     drawAreas();
     renderGKStatTable();
 
@@ -1759,7 +1783,8 @@ async function changeGoalkeeper() {
         updateStatsHeading();
         updateStatistics();
         renderShotTable();
-        renderGkOverviewTable()
+        renderGkOverviewTable();
+        renderGKStatTable();
         drawAreas();
 
         /* 3.3 Persistent speichern */
@@ -1818,7 +1843,6 @@ async function undoLastShot() {
     /* Offline-Shots (id undefined) sind damit einfach aus dem Array entfernt. */
     updateStatistics();
     renderShotTable();
-    // renderGkOverviewTable()
     renderGKStatTable();
     drawAreas();
     showToast('Letzter Shot zurückgenommen', 'update');
@@ -1846,8 +1870,8 @@ function exportData() {
     /* ================================================================
        1) Guard – ist SheetJS (xlsx.full.min.js) bereits vollständig
           geladen?  Wir prüfen:
-            a) window.XLSX        → globales Objekt existiert
-            b) window.XLSX.utils  → Unterobjekt mit json_to_sheet etc.
+            a) window.XLSX → globales Objekt existiert
+            b) window.XLSX.utils → Unterobjekt mit json_to_sheet etc.
        ================================================================ */
     if (!window.XLSX || !window.XLSX.utils) {
         showToast('XLSX-Bibliothek lädt noch … bitte kurz warten', 'offline');
@@ -1958,7 +1982,7 @@ async function changeAss(delta) {
     const half = currentHalf();
 
     /* --------------------------------------------------------------
-       1)  Negative Klicks abfangen, *und* den Button sofort sperren.
+       1) Negative Klicks abfangen, *und* den Button sofort sperren.
     -------------------------------------------------------------- */
     if (delta < 0 && ass[gk][half] === 0) {
         const decBtn = document.getElementById('ass-decrement');
@@ -1971,11 +1995,8 @@ async function changeAss(delta) {
     await setAss(ass); // persistieren
 
     /* 3) UI aktualisieren  ---------------------------------------- */
-    updateAssBadge(); // Badge + Button-Status
-    const td = document.querySelector(
-        `#gk-stat-table tbody tr[data-key="${gk}-${half}"] td:nth-child(${ASS_IDX + 1})`
-    );
-    if (td) td.textContent = ass[gk][half] === 0 ? '' : String(ass[gk][half]);
+    updateAssBadge();
+    renderGKStatTable();
 }
 
 /**
@@ -1986,66 +2007,62 @@ async function changeSevenG6(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
-    if (delta < 0 && sevenG6[gk][half] === 0) return;
+    if (delta < 0 && sevenG6[gk][half] === 0) {
+        document.getElementById('seven-g6-decrement').disabled = true;
+        return;
+    }
 
     sevenG6[gk][half] = Math.max(0, sevenG6[gk][half] + delta);
     await setSevenG6(sevenG6);
 
     updateSevenG6Badge();
-
-    /* Tabellen-Zelle updaten */
-    const td = document.querySelector(
-        `#gk-stat-table tbody tr[data-key="${gk}-${half}"] td:nth-child(${SEVENG6_IDX + 1})`
-    );
-    if (td) td.textContent = sevenG6[gk][half] === 0 ? '' : String(sevenG6[gk][half]);
+    renderGKStatTable();
 }
 
 async function changeTor(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
-    if (delta < 0 && torCount[gk][half] === 0) return;
+    if (delta < 0 && torCount[gk][half] === 0) {
+        document.getElementById('tor-decrement').disabled = true;
+        return;
+    }
 
     torCount[gk][half] = Math.max(0, torCount[gk][half] + delta);
     await setTor(torCount);
 
     updateTorBadge();
-
-    /* Tabellen-Zelle updaten */
-    const td = document.querySelector(
-        `#gk-stat-table tbody tr[data-key="${gk}-${half}"] td:nth-child(${TOR_HEAD_IDX + 1})`
-    );
-    if (td) td.textContent = torCount[gk][half] === 0 ? '' : String(torCount[gk][half]);
+    renderGKStatTable();
 }
 
 async function changeTF(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
-    if (delta < 0 && tfCount[gk][half] === 0) return;
+    if (delta < 0 && tfCount[gk][half] === 0) {
+        document.getElementById('tf-decrement').disabled = true;
+        return;
+    }
 
     tfCount[gk][half] = Math.max(0, tfCount[gk][half] + delta);
     await setTF(tfCount);
 
     updateTFBadge();
-
-    const td = document.querySelector(
-        `#gk-stat-table tbody tr[data-key="${gk}-${half}"] td:nth-child(${TF_IDX + 1})`
-    );
-    if (td) td.textContent = tfCount[gk][half] === 0 ? '' : String(tfCount[gk][half]);
+    renderGKStatTable();
 }
 
 function promptUserToUpdate(reg) {
-    /* Klickbarer Hinweis-Toast */
     const toast = showToast(
         'Update verfügbar – hier tippen, um neu zu laden',
         'update'
     );
+
     if (!toast) return;
     toast.addEventListener('click', () => {
         if (reg.waiting) {
             reg.waiting.postMessage({type: 'SKIP_WAITING'});
         }
+
     });
 }
 
