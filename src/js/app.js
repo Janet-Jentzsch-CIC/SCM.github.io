@@ -63,12 +63,17 @@ const SECOND_HALF = 2;
 const HALF_LENGTH = 30 * 60; // 30 min (Halbzeit)
 const FULL_LENGTH = 60 * 60; // 60 min (Spielende)
 
+export const GOALKEEPERS = {
+    1: {number: 1, name: 'Hernandez'},
+    2: {number: 80, name: 'Portner'}
+};
+
 function currentHalf() {
     return gameSeconds < HALF_LENGTH ? FIRST_HALF : SECOND_HALF;
 }
 
 /* =====================================================================
- *  Alle Halbzeit-abhängigen Badges & Button-States neu zeichnen
+ * Alle Halbzeit-abhängigen Badges & Button-States neu zeichnen
  * ===================================================================*/
 function refreshHalfDependentUI() {
     updateAssBadge();
@@ -79,52 +84,73 @@ function refreshHalfDependentUI() {
 }
 
 /* =====================================================================
- *  1.1 Badge Updates
+ * 1.1 Badge Updates
+ * ===================================================================*/
+
+/* =====================================================================
+ * Gemeinsamer Helper – liefert „#1“ bzw. „#80“
+ * (Fällt auf Torwart-Index zurück, falls Objekt fehlt)
+ * ===================================================================*/
+function gkNumLabel(gkId) {
+    return `#${GOALKEEPERS[gkId]?.number ?? gkId}`;
+}
+
+/* =====================================================================
+ * 1.1 Badge-Updates – Assists
  * ===================================================================*/
 function updateAssBadge() {
     const gk = currentGoalkeeper;
-    const half = currentHalf();
+    const half = currentHalf(); // 1. oder 2. Halbzeit
 
-    /* --- Badge-Rendering wie gehabt -------------------------------- */
+    /* ---------- Badge-Markup -------------------------------------- */
     document.querySelector('#ass-value').innerHTML =
-        `<div style="font-size:.85em">TW ${gk}<br>${half}. HZ</div>
+        `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${ass[gk][half]}</div>`;
 
-    /* --- Button sperren, wenn Wert 0 --------------------------- */
+    /* Minus-Button deaktivieren, wenn Wert 0 ----------------------- */
     const decBtn = document.getElementById('ass-decrement');
     if (decBtn) decBtn.disabled = ass[gk][half] === 0;
 }
 
+/* =====================================================================
+ * 1.2 Badge-Updates – 7 gegen 6
+ * ===================================================================*/
 function updateSevenG6Badge() {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
     document.querySelector('#seven-g6-value').innerHTML =
-        `<div style="font-size:.85em">TW ${gk}<br>${half}. HZ</div>
+        `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${sevenG6[gk][half]}</div>`;
 
     const dec = document.getElementById('seven-g6-decrement');
     if (dec) dec.disabled = sevenG6[gk][half] === 0;
 }
 
+/* =====================================================================
+ * 1.3 Badge-Updates – Eigene Tore
+ * ===================================================================*/
 function updateTorBadge() {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
     document.querySelector('#tor-value').innerHTML =
-        `<div style="font-size:.85em">TW ${gk}<br>${half}. HZ</div>
+        `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${torCount[gk][half]}</div>`;
 
     const dec = document.getElementById('tor-decrement');
     if (dec) dec.disabled = torCount[gk][half] === 0;
 }
 
+/* =====================================================================
+ * 1.4 Badge-Updates – Technische Fehler
+ * ===================================================================*/
 function updateTFBadge() {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
     document.querySelector('#tf-value').innerHTML =
-        `<div style="font-size:.85em">TW ${gk}<br>${half}. HZ</div>
+        `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${tfCount[gk][half]}</div>`;
 
     const dec = document.getElementById('tf-decrement');
@@ -135,7 +161,7 @@ function updateTFBadge() {
 export const DUMMY_GOAL_ID = 999;
 
 /* ----------------------------------------------
-   Zuordnung shotArea → Statistik-Spalte
+  Zuordnung shotArea → Statistik-Spalte
 ------------------------------------------------ */
 /* Mapping Shot-Area → Statistik-Spalte */
 const AREA_TO_COL = {
@@ -172,7 +198,7 @@ let shots = []; // alle Würfe – synchron & unsynchron
 let shotAreas = []; // Liste der Shot-Areas (Wurfzonen)
 let goalAreas = []; // Liste der Goal-Areas (Torzonen)
 
-/* =======  RIVAL GK Tracking  ========================================= */
+/* ======= RIVAL GK Tracking ========================================= */
 let rivalShots = []; // Alle Würfe gegnerischer Keeper
 let currentRivalGoalkeeper = 1; // Start = „Torwart 1“
 let currentRivalPos = null; // zuletzt geklickte Wurfposition
@@ -431,7 +457,7 @@ function setupEventListeners() {
 
 
     /* --------------------------------------------------
-     *  RIVAL – Positions- & Action-Buttons
+     * RIVAL – Positions- & Action-Buttons
      * -------------------------------------------------- */
     const rivalPosBtns = document
         .querySelectorAll('.gk-overview-positions-btns-container .gk-overview-action-btn');
@@ -475,7 +501,7 @@ function setupEventListeners() {
  *  RIVAL : Shot fertigstellen
  * ===================================================================*/
 async function finishRivalShot(isSave) {
-    if (!currentRivalPos) {                   // keine Pos. gewählt
+    if (!currentRivalPos) { // keine Pos. gewählt
         showToast('Erst eine Wurfposition wählen!', 'offline');
         return;
     }
@@ -488,7 +514,7 @@ async function finishRivalShot(isSave) {
         shotCategory: currentRivalPos, // z.B. 'ra'
         isGoalkeeperSave: isSave,
         goalkeeperId: currentRivalGoalkeeper,
-        team: 'rival'                         // <<< einziges Unterscheidungsmerkmal
+        team: 'rival' // einziges Unterscheidungsmerkmal
     };
 
     /* sofort persistieren, falls online */
@@ -692,7 +718,7 @@ function initAreaEditors() {
 }
 
 /* --------------------------------------------------------------
-   Shot-Tabelle (rechte Spalte) – erzeugt/aktualisiert die Tabelle
+ Shot-Tabelle (rechte Spalte) – erzeugt/aktualisiert die Tabelle
 ----------------------------------------------------------------*/
 function makeEmptyStatRow(goalkeeperName, halfLabel = '') {
     const row = document.createElement('tr');
@@ -1489,18 +1515,29 @@ function renderGKStatTable() {
     tbody.innerHTML = '';
 
     /* ---- 1) Grundgerüst: 4 feste Zeilen --------------------------- */
+    /* ------------------------------------------------------------
+    Keeper-Meta: Label jetzt dynamisch (#<Rückennummer>)
+    statt fixer Strings „TW1 / TW2“ */
     const ROW_META = [
-        {gk: 1, half: 1, label: 'TW1', time: '01-30'},
-        {gk: 1, half: 2, label: 'TW1', time: '31-60'},
-        {gk: 2, half: 1, label: 'TW2', time: '01-30'},
-        {gk: 2, half: 2, label: 'TW2', time: '31-60'}
+        {gk: 1, half: 1, time: '01-30'},
+        {gk: 1, half: 2, time: '31-60'},
+        {gk: 2, half: 1, time: '01-30'},
+        {gk: 2, half: 2, time: '31-60'}
     ];
 
     /* Map: key → <tr>-Element */
     const ROW_MAP = {};
     ROW_META.forEach(meta => {
         const key = `${meta.gk}-${meta.half}`;
-        const tr = makeEmptyStatRow(`${meta.label} ${meta.half}. HZ`, meta.time);
+
+        /* ----------------------------------------------------------
+           Label ergibt sich jetzt aus der Map GOALKEEPERS:
+               #<Nummer> + „<Halbzeit>. HZ“
+           Beispiel: „#1 1. HZ“ bzw. „#80 2. HZ“
+        ----------------------------------------------------------- */
+        const gkNum = GOALKEEPERS[meta.gk].number;
+        const tr = makeEmptyStatRow(`#${gkNum} ${meta.half}. HZ`, meta.time);
+
         ROW_MAP[key] = tr;
         tbody.appendChild(tr);
     });
@@ -1611,8 +1648,8 @@ function updateStatsHeading() {
 function getRelCoords(e) {
     const r = canvas.getBoundingClientRect();
     return {
-        relX: (e.clientX - r.left) / canvasWidth,
-        relY: (e.clientY - r.top) / canvasHeight
+        relX: (e.clientX - r.left) / r.width,
+        relY: (e.clientY - r.top) / r.height
     };
 }
 
@@ -1730,17 +1767,29 @@ async function hardResetGame() {
             setMatchInfo('competition', ''),
             setMatchInfo('date', ''),
             setMatchInfo('location', ''),
+            setMatchInfo('team', ''),
             setMatchInfo('opponent', ''),
             setMatchInfo('halftime', ''),
             setMatchInfo('fulltime', '')
         ]);
+
         // UI-Felder zurücksetzen
-        document.querySelector('#information-container input[placeholder="Wettbewerb wählen"]').value = '';
-        document.querySelector('#information-container input[placeholder="Datum eingeben"]').value = '';
-        document.querySelector('#information-container input[placeholder="Spielort"]').value = '';
-        document.querySelector('#summary-container input[placeholder="Gegner eintragen"]').value = '';
-        document.querySelector('#summary-container input[placeholder="Halbzeit"]').value = '';
-        document.querySelector('#summary-container input[placeholder="Endstand"]').value = '';
+        const idClear = id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        };
+
+        // Match-Info-Felder komplett leeren
+        [
+            'team-input',       // Team
+            'opponent-input',   // Gegner
+            'halftime-input',   // Halbzeit
+            'fulltime-input',   // Endstand
+            'competition-input',// Wettbewerb
+            'date-input',       // Datum
+            'location-input'    // Spielort
+        ].forEach(idClear);
+
     } catch (err) {
         console.error('[RESET] Match-Info löschen fehlgeschlagen:', err);
     }
@@ -1802,11 +1851,14 @@ async function changeGoalkeeper() {
  */
 function updateGoalkeeperButton() {
     const btn = document.getElementById('change-goalkeeper-btn');
-    btn.textContent = `Torwart ${currentGoalkeeper}`;
+    const {number, name} = GOALKEEPERS[currentGoalkeeper] ??
+    {number: currentGoalkeeper, name: ''};
+
+    /* Badge-Markup:  <span class="gk-num">#1</span> Hernandez */
+    btn.innerHTML = `<span class="gk-num">#${number}</span> ${name}`;
     btn.dataset.goalkeeperId = currentGoalkeeper;
-    // Zustandsklassen (1 & 2) entfernen
+
     btn.classList.remove('goalkeeper-1', 'goalkeeper-2');
-    // Neue Klasse setzen (z.B. „goalkeeper-2“)
     btn.classList.add(`goalkeeper-${currentGoalkeeper}`);
 }
 

@@ -1,8 +1,5 @@
 /*  -------------------------------------------------------------------------
     styles.css  –  zentrales Stylesheet der PWA
-    -------------------------------------------------------------------------
-      • Layering-Regeln für Canvas & Buttons globalisiert
-      • Dark-Mode nur Farb- und Kontrastanpassungen
     ---------------------------------------------------------------------- */
 
 /*  ==== 1. Grundfarben (CSS-Custom-Properties) =========================== */
@@ -133,14 +130,53 @@ button {
     background-color: #004080; /* etwas heller als Dunkelblau */
 }
 
-.goalkeeper-button {
+/*.goalkeeper-button {
     color: white;
     border: none;
     padding: 0.5rem 1rem;
     border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.3s ease;
+}*/
+
+/* ---------- GK-Toggle: bessere Lesbarkeit ---------- */
+.goalkeeper-button{
+    font-weight:600; /* fetter */
+    font-size:0.9rem; /* etwas größer */
+    letter-spacing:.25px; /* bessere Differenzierung */
+    text-transform:none; /* Namen unverändert lassen */
+    border:2px solid rgba(0,0,0,.15); /* dezenter Rahmen für Kontrastkante */
 }
+
+/* Nummer links als abgerundetes Badge */
+.goalkeeper-button{
+    display:flex;
+    align-items:center;
+    gap:6px;
+}
+
+.goalkeeper-button .gk-num{
+    display:inline-block;
+    min-width:26px;
+    padding:2px 6px;
+    background:rgba(0,0,0,.25); /* halbtransparent schwarz */
+    border-radius:6px;
+    font-weight:700;
+}
+
+/* Individuelle Farbanpassungen ---------------------------------- */
+.goalkeeper-1{
+    background:#009e90;       /* dunkleres Türkis → mehr Kontrast */
+    color:#fff;               /* bleibt weiß */
+}
+.goalkeeper-2{
+    background:#003c80;       /* leicht helleres Blau */
+    color:#fff;               /* bleibt weiß */
+}
+
+/* Hover-States analog abdunkeln */
+.goalkeeper-1:hover{ background:#00b0a0; }
+.goalkeeper-2:hover{ background:#004d99; }
 
 /* Match-Information – volle Breite, keine äußeren Ränder */
 .match-information {
@@ -282,19 +318,12 @@ button {
 
 /* --------------------------------------------------------------
    Spalten-Rahmen für visuelle Kontrolle (Debug)
-   .debug-col liegt auf allen vier Grid-Items
 -------------------------------------------------------------- */
 .debug-col {
-    /*
-      border: 1px solid #ff80bf; !* dünner pinker Rand *!
-      */
     box-sizing: border-box; /* damit Breite exakt bleibt */
 }
 
-/* Feld- und Tabellen-Spalten können bei Bedarf
-   noch eigene Layout-Regeln haben */
 .table-col {
-    /* min-width: 300px; */
     width: 100%;
     padding: 0.5rem;
 }
@@ -463,17 +492,6 @@ textarea:focus {
 }
 
 /*  ==== 5. Action-Buttons (Tor, Gehalten, Cancel) ======================= */
-/* .action-buttons {
-    position: absolute;
-    display: flex;
-    flex-direction: row;
-    gap: 0.5rem;
-    z-index: 20; 
-    top: clamp(1rem, 3vw, 1.8rem);
-    left: clamp(1rem, 6vw, 5rem);
-    transform-origin: top left;
-    width: max-content; 
-} */
 .action-buttons {
     display: flex;
     flex-direction: row;
@@ -629,7 +647,7 @@ textarea:focus {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
-/* Farbcodierung ------------------------------------------------ */
+/* Farbcodierung -------------------------------------------- */
 /* iPad / kleinere Tablets ---------------------------------- */
 @media (max-width: 1024px) {
     .action-buttons {
@@ -1345,8 +1363,6 @@ button.btn-secondary:disabled {
     margin-top: .5rem;
 }
 
-/* vorher 1 rem */
-
 /* ------------------------------------------------------------
    Header-Tabelle
    ----------------------------------------------------------- */
@@ -1467,35 +1483,32 @@ html[data-theme="light"] {
     cursor: pointer;
 }
 
-/* === LIGHT-THEME table contrast patch ============================= */
+/* === LIGHT-THEME Tabellen-Kontrast-Patch ========================== */
 html[data-theme="light"] {
 
-    /* 1) чуть темнее фон зебры / шапки */
-    --table-bg-even : #e8e8e8;      /* было #f1f1f1 */
-    --table-bg-odd  : #ffffff;      /* ок */
-    --table-head-bg : #cfcfcf;      /* было #d0d0d0 */
+    /* 1) Etwas dunklerer Hintergrund für Zebra-Streifen / Tabellenkopf */
+    --table-bg-even : #e8e8e8;
+    --table-bg-odd  : #ffffff;
+    --table-head-bg : #cfcfcf;
 
-    /* 2) насыщеннее «серые» линии/текст */
-    --accent-gray   : #b5b5b5;      /* границы */
-    --table-font    : #222222;      /* тело ячейки */
+    /* 2) Sättigere „graue“ Linien / Texte */
+    --accent-gray   : #b5b5b5; /* Rahmenfarbe */
+    --table-font    : #222222; /* Textfarbe in Tabellenzellen */
 
-    /* 3) чуть темнее цветные акценты
-          (на Screenshot они кажутся «вымытыми») */
-    --shot-goal-bg  : #700;         /* было #800  */
-    --shot-save-bg  : #063;         /* было #084  */
+    /* 3) Etwas dunklere Akzentfarben */
+    --shot-goal-bg  : #700;
+    --shot-save-bg  : #063;
 }
 
-/* вернуть насыщенный оттенок цифрам в спец-строках */
-html[data-theme="light"] .shot-row--goal  td { color:#ff6d6d; } /* ярко-красный */
-html[data-theme="light"] .shot-row--save  td { color:#2ecc71; } /* ярко-зелёный */
+/* Sättigere Farben für Zahlen in Spezialzeilen */
+html[data-theme="light"] .shot-row--goal  td { color:#ff6d6d; } /* leuchtend rot */
+html[data-theme="light"] .shot-row--save  td { color:#2ecc71; } /* leuchtend grün */
 
 html[data-theme="light"] .gk-stat-table,
 html[data-theme="light"] .gk-stat-table td,
 html[data-theme="light"] .shot-table,
 html[data-theme="light"] .shot-table td {
-    border-color:#b5b5b5;   /* тот же --accent-gray */
+    border-color:#b5b5b5;
 }
-
-
 
 /* Ende src/css/styles.css */

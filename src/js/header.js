@@ -202,30 +202,31 @@ document.addEventListener("DOMContentLoaded", async () => {
         matchInfo.team || "",
         "team-input"
     );
+
     const competitionInput = createInputCell(
         "Wettbewerb wählen",
-        [
-            "Bundesliga",
-            "Pokal",
-            "Europapokal",
-            "3. Liga",
-            "Testspiel",
-        ],
+        ["Bundesliga", "Pokal", "Europapokal", "3. Liga", "Testspiel"],
         "100%",
-        matchInfo.competition || ""
+        matchInfo.competition || "",
+        "competition-input"
     );
+
     const dateInput = createInputCell(
         "Datum eingeben",
         [],
         "100%",
-        matchInfo.date || formatDateGerman(new Date())
+        matchInfo.date || formatDateGerman(new Date()),
+        "date-input"
     );
+
     const locationInput = createInputCell(
         "Spielort",
         ["Magdeburg", "Dessau"],
         "100%",
-        matchInfo.location || ""
+        matchInfo.location || "",
+        "location-input"
     );
+
     const opponentInput = createInputCell(
         "Gegner eintragen",
         [],
@@ -233,6 +234,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         matchInfo.opponent || "",
         "opponent-input"
     );
+
     const halftimeInput = createInputCell(
         "Halbzeit",
         [],
@@ -240,6 +242,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         matchInfo.halftime || "",
         "halftime-input"
     );
+
     const fulltimeInput = createInputCell(
         "Endstand",
         [],
