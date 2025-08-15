@@ -35,57 +35,107 @@
     <meta content="#006521" name="theme-color"/>
 
     <!-- ===============================================================
-         SheetJS-Loader – lädt zuerst lokal, dann CDN-Fallback
-         aktiviert den Export-Button erst nach erfolgreichem Load.
-         ============================================================== -->
+     SheetJS-Loader – versucht mehrere lokale Pfade, dann CDN
+     und schaltet den Export-Button erst bei erfolgreichem Load frei.
+     ============================================================== -->
     <script>
         (function loadXLSX() {
-            /* 1) kleinen Helper, um später den Export-Button freizuschalten */
+            /* ----------------------------------------------------------
+               Helper: Export-Button freischalten, sobald XLSX verfügbar ist
+               ---------------------------------------------------------- */
             function enableExportBtn() {
                 const btn = document.getElementById("export-btn");
                 if (btn) btn.disabled = false;
             }
 
-            /* 2) Lokale Bibliothek versuchen --------------------------- */
-            const local = document.createElement("script");
-            local.src = "./vendor/xlsx.full.min.js";
+            /* ----------------------------------------------------------
+               Helper: prüft, ob das globale XLSX korrekt geladen wurde
+               ---------------------------------------------------------- */
+            function isXlsxReady() {
+                return !!(window.XLSX && window.XLSX.utils && typeof window.XLSX.utils.json_to_sheet === "function");
+            }
 
-            /* Erfolg –> Button freischalten */
-            local.onload = () => {
-                if (window.XLSX?.utils) {
-                    if (document.readyState === "loading")
-                        document.addEventListener("DOMContentLoaded", enableExportBtn);
-                    else enableExportBtn();
-                }
-            };
+            /* ----------------------------------------------------------
+               Helper: Script-Tag dynamisch laden (Promise-basiert)
+               ---------------------------------------------------------- */
+            function loadScript(src) {
+                return new Promise((resolve, reject) => {
+                    const s = document.createElement("script");
+                    s.src = src;
+                    s.onload = () => resolve({ok: true, src});
+                    s.onerror = () => reject(new Error("FAILED: " + src));
+                    document.head.appendChild(s);
+                });
+            }
 
-            /* Fehler –> CDN-Fallback */
-            local.onerror = () => {
-                console.warn("[XLSX] Lokaler Load fehlgeschlagen – wechsle auf CDN");
-                const cdn = document.createElement("script");
-                cdn.src =
-                    "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+            /* ----------------------------------------------------------
+               1) Kandidaten-Liste lokaler Pfade (erst diese probieren)
+               –> Lege die Datei xlsx.full.min.js in einen dieser Ordner.
+               ---------------------------------------------------------- */
+            const localCandidates = [
+                "./src/js/lib/xlsx.full.min.js",  // bevorzugter Ort neben idb-umd.js
+                "./vendor/xlsx.full.min.js"       // alternativer Vendor-Ordner
+            ];
 
-                cdn.onload = () => {
-                    if (window.XLSX?.utils) {
-                        if (document.readyState === "loading")
-                            document.addEventListener("DOMContentLoaded", enableExportBtn);
-                        else enableExportBtn();
-                    } else {
-                        console.error("[XLSX] CDN-Load ok, aber XLSX nicht verfügbar");
+            /* ----------------------------------------------------------
+               2) CDN-Fallback (wenn alle lokalen Pfade fehlschlagen)
+               ---------------------------------------------------------- */
+            const cdnUrl = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+
+            /* ----------------------------------------------------------
+               3) Kaskadierte Lade-Logik:
+                  – gehe die lokalen Pfade der Reihe nach durch;
+                  – wenn keiner klappt, versuche das CDN;
+                  – bei Erfolg: isXlsxReady() prüfen und Export freischalten.
+               ---------------------------------------------------------- */
+            (async () => {
+                let loaded = false;
+
+                // a) Lokale Kandidaten seriell testen
+                for (const src of localCandidates) {
+                    try {
+                        console.info("[XLSX] Versuche lokalen Pfad:", src);
+                        await loadScript(src);
+                        if (isXlsxReady()) {
+                            console.info("[XLSX] OK (lokal):", src);
+                            loaded = true;
+                            break;
+                        } else {
+                            console.warn("[XLSX] Script geladen, aber XLSX nicht verfügbar:", src);
+                        }
+                    } catch (e) {
+                        console.warn("[XLSX] Lokaler Load fehlgeschlagen:", src);
                     }
-                };
+                }
 
-                cdn.onerror = () =>
-                    console.error(
-                        "[XLSX] CDN-Laden fehlgeschlagen – Export bleibt deaktiviert"
-                    );
+                // b) Falls lokal nicht erfolgreich → CDN
+                if (!loaded) {
+                    try {
+                        console.warn("[XLSX] Wechsle auf CDN:", cdnUrl);
+                        await loadScript(cdnUrl);
+                        if (isXlsxReady()) {
+                            console.info("[XLSX] OK (CDN).");
+                            loaded = true;
+                        } else {
+                            console.error("[XLSX] CDN geladen, aber XLSX nicht verfügbar");
+                        }
+                    } catch (e) {
+                        console.error("[XLSX] CDN-Laden fehlgeschlagen:", cdnUrl);
+                    }
+                }
 
-                document.head.appendChild(cdn);
-            };
-
-            /* 3) Start des Ladevorgangs */
-            document.head.appendChild(local);
+                // c) UI finalisieren
+                if (loaded && isXlsxReady()) {
+                    // Bei Bedarf DOMContentLoaded abwarten (falls Button noch nicht im DOM ist)
+                    if (document.readyState === "loading") {
+                        document.addEventListener("DOMContentLoaded", enableExportBtn, {once: true});
+                    } else {
+                        enableExportBtn();
+                    }
+                } else {
+                    console.error("[XLSX] Konnte nicht geladen werden – Export bleibt deaktiviert.");
+                }
+            })();
         })();
     </script>
 
@@ -195,7 +245,7 @@
         <section class="tracking-section">
             <!-- Kopfzeile: Titel, Legende, Show-Lines-Toggle -->
             <div class="tracking-header">
-                <h2><!-- wird von app.js gesetzt --></h2>
+                <!--                <h2 id="stats-heading">Shot Statistics – #1</h2>-->
 
                 <div class="tracking-tools">
                     <!-- Kleine Legende ----------------------- -->
@@ -349,6 +399,68 @@
                 </table>
             </div>
 
+            <!-- =========================================================
+                 Rivalen – identische Aggregat-Tabelle direkt darunter
+                 (gleicher thead, damit die Spaltenindizes passen)
+                 ========================================================= -->
+            <section class="stats-section" id="rival-gk-stat-section" style="margin-top:12px;">
+                <!-- <h3 class="stats-title">Rival – Shot Statistics</h3> -->
+                <div class="gk-stat-wrapper" id="rival-gk-stat-wrapper">
+                    <table class="gk-stat-table" id="rival-gk-stat-table">
+                        <thead>
+                        <tr>
+                            <!-- linke Hälfte -------------------------------- -->
+                            <th rowspan="2">Name</th>
+                            <th rowspan="2">Spielzeit</th>
+                            <th rowspan="2" title="Paraden">P</th>
+                            <th colspan="11">Paraden&nbsp;je&nbsp;Wurfart</th>
+                            <th rowspan="2" title="Assists pro Tor">Ass</th>
+                            <th class="tor-head" rowspan="2" title="geworfene Tore">
+                                Tor
+                            </th>
+
+                            <th class="divider-col" rowspan="2"></th>
+
+                            <!-- rechte Hälfte ------------------------------- -->
+                            <th class="gk-total-goals" rowspan="2">T</th>
+                            <th colspan="9">Tore&nbsp;je&nbsp;Wurfart</th>
+                            <th rowspan="2">GS</th>
+                            <th rowspan="2">7m</th>
+                            <th rowspan="2">7g6</th>
+                            <th rowspan="2">TF</th>
+                            <th rowspan="2">Ges.</th>
+                            <th rowspan="2">%</th>
+                        </tr>
+                        <tr>
+                            <!-- Unterzeile Paraden -->
+                            <th>RL</th>
+                            <th>RM</th>
+                            <th>RR</th>
+                            <th>K</th>
+                            <th>LA</th>
+                            <th>RA</th>
+                            <th>DL</th>
+                            <th>DM</th>
+                            <th>DR</th>
+                            <th>GS</th>
+                            <th>7m</th>
+                            <!-- Unterzeile Gegentore -->
+                            <th>RL</th>
+                            <th>RM</th>
+                            <th>RR</th>
+                            <th>K</th>
+                            <th>LA</th>
+                            <th>RA</th>
+                            <th>DL</th>
+                            <th>DM</th>
+                            <th>DR</th>
+                        </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
             <!-- ------------- 2-spaltiges Grid (Feld | Tabelle) -------- -->
             <div class="tracking-grid">
                 <!-- a) Spielfeld -------------------------------------- -->
@@ -391,16 +503,12 @@
                 </aside>
 
                 <div class="gk-overview-container">
-                    <div class="gk-names-container">
-                        <div>
-                            <h3>Torwart 1: Miroslavljev</h3>
-                            <h3>Torwart 2: Ludwig</h3>
-                        </div>
-                        <div class="gk-overview-btn-container">
+                    <div class="gk-overview-btn-container">
+                        <div class="timer rival-toggle-card">
+                            <div class="timer-label">Gegnerischer Torhüter</div>
                             <button class="gk-overview-toggle-btn">Torwart 1</button>
                         </div>
                     </div>
-
                     <!-- ========================== GK-OVERVIEW POSITIONS BUTTONS ========================== -->
                     <div class="gk-overview-positions-btns-container">
                         <button class="gk-overview-action-btn">RA</button>
@@ -449,57 +557,6 @@
             <button class="clear-all-button" id="clear-btn">Clear All</button>
             <button class="control-btn" disabled id="export-btn">Export</button>
         </div>
-
-        <!-- ---------------------------------------------------------
-             2)  Statistik-Tabs
-             ------------------------------------------------------- -->
-        <section class="stats-section" hidden>
-            <h2 id="stats-heading">Shot Statistics – Goalkeeper 1</h2>
-
-            <!-- Statistik-Tabs werden aktuell nicht benötigt.
-                 Durch das hidden-Attribut bleiben alle Elemente im DOM,
-                 können später also ohne weiteres Re-Styling wieder aktiviert
-                 werden (einfach Attribut entfernen). -->
-
-            <!-- Tabs -->
-            <div class="stats-tabs">
-                <button class="tab-btn active" data-editor="shot">
-                    Shot Positions
-                </button>
-                <button class="tab-btn" data-editor="goal">Goal Areas</button>
-                <button class="tab-btn" data-editor="none">Combinations</button>
-                <button class="tab-btn" data-editor="none">Edit Areas</button>
-            </div>
-
-            <!-- Tab-Inhalte -->
-            <div class="stats-content">
-                <div class="tab-content active" id="shot-positions-content">
-                    <div class="stats-grid" id="shot-positions-stats"></div>
-                </div>
-
-                <div class="tab-content" id="goal-areas-content">
-                    <div class="stats-grid" id="goal-areas-stats"></div>
-                </div>
-
-                <div class="tab-content" id="combinations-content">
-                    <table id="combinations-stats">
-                        <thead>
-                        <tr>
-                            <th>Shot Area</th>
-                            <th>Goal Area</th>
-                            <th>Count</th>
-                            <th>Percentage</th>
-                        </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
-
-                <div class="tab-content" id="areas-editor-content">
-                    <!-- Area-Editor wird dynamisch gerendert -->
-                </div>
-            </div>
-        </section>
     </main>
 </div>
 

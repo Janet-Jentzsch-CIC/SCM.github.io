@@ -14,7 +14,7 @@
 // einheitlicher Präfix & scoped Cache-Name
 const BASE_URL = self.registration.scope.replace(/src\/sw\/?$/, '');
 const CACHE_PREFIX = 'handball-tracker';
-const CACHE_VERSION = 'v3.13'; // Bei Upgrades die Version hochziehen
+const CACHE_VERSION = 'v3.14'; // Bei Upgrades die Version hochziehen
 /**
  * Ein eindeutiger Cache-Name pro Deploy-Ort (Origin + Scope).
  * • vermeidet Kollisionen zwischen Dev-/Prod-Builds
@@ -38,7 +38,6 @@ const APP_SHELL = [
 
     /* Styles (inkl. optionaler Source-Map) */
     'src/css/styles.css',
-    // 'src/css/styles.css.map', // einkommentieren, wenn du die Map auslieferst
 
     /* Bilder */
     'src/images/goal-background.png',
@@ -60,29 +59,33 @@ self.addEventListener('install', event => {
             await Promise.all(
                 APP_SHELL.map(url =>
                     fetch(url, {cache: 'no-store'})
-                        .then(r => r.ok && cache.put(url, r))
+                        .then(r => { if (r.ok) return cache.put(url, r.clone()); })
+                        // Response-Klon ablegen,
+                        // falls Response-Body später noch anderweitig gelesen wird.
                         .catch(() => console.warn('[SW] Skip precache', url))
                 )
             );
-            await self.skipWaiting(); // здесь достаточно
+            await self.skipWaiting();
         })
     );
 });
 
 /* -----------------------------------------------------------------------
-    activate – alte Caches bereinigen
+    activate – alte Caches bereinigen + neue SW-Instanz sofort übernehmen
     -------------------------------------------------------------------- */
-self.addEventListener('activate', async event => {
-    event.waitUntil(
-        caches.keys().then(keys =>
-            Promise.all(
-                keys
-                    .filter(k => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME)
-                    .map(k => caches.delete(k))
-            )
-        )
-    );
-    await self.clients.claim();
+self.addEventListener('activate', event => {
+    // ▼ Alles in waitUntil kapseln, damit der Browser die Aktivierung
+    //   nicht „zu früh“ beendet. So wird garantiert:
+    //   1) Cache-Aufräumung fertig, 2) Clients übernommen (claim).
+    event.waitUntil((async () => {
+        const keys = await caches.keys();
+        await Promise.all(
+            keys
+                .filter(k => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME)
+                .map(k => caches.delete(k))
+        );
+        await self.clients.claim(); // ► neue SW steuert sofort alle offenen Clients
+    })());
 });
 
 /* -----------------------------------------------------------------------
@@ -99,11 +102,20 @@ self.addEventListener('fetch', event => {
     }
 
     /* 2) Runtime-Assets  (JS + Bilder)  ------------------------------ */
-    const runtimeRegex = /\/src\/(?:js|css|images|icons|lib)\//;
-    const runtimeMatch =
-        (url.origin === location.origin) &&
-        (runtimeRegex.test(url.pathname) || url.pathname.startsWith('/vendor/'));
-    if (runtimeMatch) {
+    /* Pfade relativ zum Scope ermitteln, damit Deploys unter /<prefix>/ sauber laufen */
+    const SRC_PREFIX    = new URL('src/', BASE_URL).pathname; // z. B. '/app/src/'
+    const VENDOR_PREFIX = new URL('vendor/', BASE_URL).pathname; // z. B. '/app/vendor/'
+
+    /* 2) Runtime-Assets  (JS + Styles + Bilder + Icons + lib + vendor) ---- */
+    // ▼ Statt auf absolute '/vendor/' prüfen wir gegen die Präfixe mit BASE_URL.
+    const isSameOrigin = (url.origin === location.origin);
+    const isRuntime =
+        isSameOrigin && (
+            url.pathname.startsWith(SRC_PREFIX) ||
+            url.pathname.startsWith(VENDOR_PREFIX)
+        );
+
+    if (isRuntime) {
         event.respondWith(networkFirst(request));
         return;
     }
@@ -117,10 +129,19 @@ self.addEventListener('fetch', event => {
     -------------------------------------------------------------------- */
 self.addEventListener('message', event => {
     if (event.data?.type === 'SKIP_WAITING') {
-        console.log('[SW] ⚡ Skip Waiting empfangen – aktiviere neue Version');
-        self.skipWaiting().then(() => {
-            event.source?.postMessage?.({type: 'CLIENTS_CLAIMED'});
-        });
+        // ▼ Sicherstellen, dass der neue SW nicht nur „aktiv“ wird,
+        //   sondern auch unmittelbar alle Clients übernimmt.
+        event.waitUntil((async () => {
+            console.log('[SW] ⚡ Skip Waiting empfangen – aktiviere neue Version');
+            await self.skipWaiting();
+            await self.clients.claim();
+
+            // Optional: alle Fenster informieren (robust gegenüber fehlender source)
+            const clients = await self.clients.matchAll({ type: 'window' });
+            for (const c of clients) {
+                c.postMessage({ type: 'CLIENTS_CLAIMED' });
+            }
+        })());
     }
 });
 

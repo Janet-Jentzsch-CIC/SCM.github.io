@@ -15,23 +15,108 @@
     --text-light: #ffffff;
 
     /* ---------- Light-Neutrals ---------- */
-    --text-dark         : #333333;
-    --background-light  : #f5f5f5;
-    --background-medium : #e0e0e0;
-    --accent-gray       : #cccccc;
-    --shadow-color      : rgba(0,0,0,.20);
+    --text-dark: #333333;
+    --background-light: #f5f5f5;
+    --background-medium: #e0e0e0;
+    --accent-gray: #cccccc;
+    --shadow-color: rgba(0, 0, 0, .20);
 
     /* ---------- Tabellen & Stripes ---------- */
-    --table-bg-even  : #eaeaea;
-    --table-bg-odd   : #f8f8f8;
-    --table-font     : #0a0a0a;
-    --table-head-bg  : #c2c2c2;
+    --table-bg-even: #eaeaea;
+    --table-bg-odd: #f8f8f8;
+    --table-font: #0a0a0a;
+    --table-head-bg: #c2c2c2;
     --table-head-font: #0a0a0a;
 
     /* ---------- Shot-Colours ---------- */
-    --shot-goal-bg : #800; /* dunkles Rot */
-    --shot-save-bg : #084; /* dunkles Grün */
+    --shot-goal-bg: #800; /* dunkles Rot */
+    --shot-save-bg: #084; /* dunkles Grün */
 
+    /* Globale Akzentfarbe für UI-Handles (für den Rival-Accordion-Button) */
+    --accent-bg: #0A7C3E; /* Default: Vereinsgrün leicht dunkler */
+}
+
+/* ================= Rival-Theme-Variablen ================= */
+/* --- Light ------------------------------------------------ */
+/* Kräftigere, klar unterscheidbare RIVAL-Farben */
+:root {
+    --rival-1-bg: #00a7c2; /* lebhaftes Cyan (gut neben Vereinsgrün) */
+    --rival-1-bg-hover: #00b8d6;
+    --rival-2-bg: #7b61ff; /* Violett/Indigo (deutlich anders als TW2-Blau) */
+    --rival-2-bg-hover: #8b73ff;
+    --rival-ring: rgba(0, 0, 0, .12); /* feine Lichtkante im Light-Theme */
+}
+
+/* --- Dark ------------------------------------------------- */
+/* Etwas heller/satter, damit es im Dark-UI nicht „ausgraut“ */
+html[data-theme="dark"] {
+    --rival-1-bg: #00bcd4;
+    --rival-1-bg-hover: #26c6da;
+    --rival-2-bg: #a78bfa;
+    --rival-2-bg-hover: #b79cff;
+    --rival-ring: rgba(255, 255, 255, .16);
+}
+
+/* ===== RIVAL-Button – Basis (Kapsel wie bei goalkeeper-button) ===== */
+/* identische Grundform & Typo wie bei deinem TW-Button */
+.rivalkeeper-button {
+    color: #fff;
+    border: 0; /* kein grauer Rand mehr */
+    padding: 0.5rem 1rem;
+    border-radius: 9999px; /* volle Kapsel */
+    cursor: pointer;
+    transition: background-color .2s ease, transform .08s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    font-size: 0.9rem;
+    letter-spacing: .017em;
+    box-shadow: inset 0 1px 0 var(--rival-ring), /* feine Glanzkante oben */ 0 4px 10px var(--shadow-color); /* weicher Drop-Shadow */
+}
+
+/* Fokussierbarer, klarer Fokusrahmen (WCAG) */
+.rivalkeeper-button:focus-visible {
+    outline: 3px solid rgba(255, 255, 255, .75);
+    outline-offset: 2px;
+}
+
+/* leichte „Pressed“-Rückmeldung */
+.rivalkeeper-button:active {
+    transform: translateY(1px) scale(.98);
+}
+
+/* ===== Farbschemata für RIVAL 1/2 auf Variablenbasis ===== */
+.rivalkeeper-1 {
+    background: var(--rival-1-bg);
+}
+
+.rivalkeeper-1:hover {
+    background: var(--rival-1-bg-hover);
+}
+
+.rivalkeeper-2 {
+    background: var(--rival-2-bg);
+}
+
+.rivalkeeper-2:hover {
+    background: var(--rival-2-bg-hover);
+}
+
+/* ===== Alte Layout-Klasse neutralisieren, falls vorhanden ===== */
+/* Breite/Höhe vom alten Überblick-Button lösen (Auto-Size) */
+.gk-overview-toggle-btn.rivalkeeper-button {
+    background: transparent; /* Farbe kommt über .rivalkeeper-1/-2 */
+    box-shadow: none; /* Schatten übernimmt .rivalkeeper-button */
+    height: auto;
+    width: auto;
+    padding: 0; /* Padding steuert die Kapsel-Klasse */
+}
+
+/* ===== RIVAL zeigt keinen Nummern-Badge ===== */
+/* Bei RIVAL kein Trikot-Badge – Platz fällt automatisch weg */
+.rivalkeeper-button .gk-num {
+    display: none !important;
 }
 
 /*  ==== 2. Basislayout =================================================== */
@@ -48,7 +133,7 @@ body {
 .header {
     background: var(--primary-green);
     color: var(--text-light);
-    padding: 3px 15px;
+    padding: 4px 15px;
     border-radius: 8px 8px 0 0;
     box-shadow: 0 2px 5px var(--shadow-color);
     position: relative;
@@ -110,73 +195,126 @@ button {
     transition: background-color 0.3s ease;
 }
 
-/* Aktive Farbe für Torwart 1: Türkis */
-.goalkeeper-1 {
-    background-color: #40e0d0; /* Türkis */
-}
-
-/* Aktive Farbe für Torwart 2: Dunkelblau */
-.goalkeeper-2 {
-    background-color: #002c66; /* Dunkelblau */
-}
-
-/* Hover-Effekt für Torwart 1 */
-.goalkeeper-1:hover {
-    background-color: #5ceee0; /* etwas heller als Türkis */
-}
-
-/* Hover-Effekt für Torwart 2 */
-.goalkeeper-2:hover {
-    background-color: #004080; /* etwas heller als Dunkelblau */
-}
-
-/*.goalkeeper-button {
+/* ===== Eigene & Rival GK-Toggles – gleiche Basisoptik ================== */
+/* Beide Klassen teilen sich dieselbe Grundform (runde Kapsel, Schatten)  */
+.goalkeeper-button,
+.rivalkeeper-button {
+    /* identisch zu deinem bestehenden Torwart-Toggle */
     color: white;
     border: none;
     padding: 0.5rem 1rem;
     border-radius: 8px;
     cursor: pointer;
     transition: background-color 0.3s ease;
-}*/
+    display: inline-flex; /* schön zentriert */
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    letter-spacing: 0.017em;
+    border: 2px solid rgba(0, 0, 0, .15);
+}
+
+/* Abzeichen mit Nummer – für beide Varianten wiederverwenden */
+.goalkeeper-button .gk-num,
+.rivalkeeper-button .gk-num {
+    display: inline-block;
+    min-width: 26px;
+    padding: 2px 6px;
+    background: rgba(0, 0, 0, .25);
+    border-radius: 6px;
+    font-weight: 700;
+}
+
+/* ===== Eigene Farbschemata (bereits vorhanden) ========================= */
+.goalkeeper-1 {
+    background: #009e90;
+    color: #fff;
+}
+
+.goalkeeper-1:hover {
+    background: #00b0a0;
+}
+
+.goalkeeper-2 {
+    background: #003c80;
+    color: #fff;
+}
+
+.goalkeeper-2:hover {
+    background: #004d99;
+}
+
+/* ===== Rival-Farbschemata ======================================== */
+/* Bewusst andere Töne, damit man Rival sofort erkennt (neutral/bläulich) */
+.rivalkeeper-1 {
+    background: #455a64;
+    color: #fff;
+}
+
+/* Slate/Neutral */
+.rivalkeeper-1:hover {
+    background: #546e7a;
+}
+
+.rivalkeeper-2 {
+    background: #5c6bc0;
+    color: #fff;
+}
+
+/* Indigo */
+.rivalkeeper-2:hover {
+    background: #6976d1;
+}
+
+.gk-overview-toggle-btn.rivalkeeper-button {
+    background: transparent; /* Basis – konkrete Farbe kommt über .rivalkeeper-1/-2 */
+    box-shadow: none; /* Schatten holt die Gruppendefinition oben */
+    height: auto; /* nicht festklemmen – Kapsel soll sich selbst ergeben */
+    width: auto;
+    padding: 0.5rem 1rem;
+}
 
 /* ---------- GK-Toggle: bessere Lesbarkeit ---------- */
-.goalkeeper-button{
-    font-weight:600; /* fetter */
-    font-size:0.9rem; /* etwas größer */
-    letter-spacing:.25px; /* bessere Differenzierung */
-    text-transform:none; /* Namen unverändert lassen */
-    border:2px solid rgba(0,0,0,.15); /* dezenter Rahmen für Kontrastkante */
+.goalkeeper-button {
+    font-weight: 600;
+    font-size: 0.9rem;
+    letter-spacing: 0.017em; /* ≈ 0,25px bei ~14–15px Schriftgröße, robust über Browser */
+    text-transform: none; /* Namen unverändert lassen */
+    border: 2px solid rgba(0, 0, 0, .15); /* dezenter Rahmen für Kontrastkante */
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
-/* Nummer links als abgerundetes Badge */
-.goalkeeper-button{
-    display:flex;
-    align-items:center;
-    gap:6px;
+.goalkeeper-button .gk-num {
+    display: inline-block;
+    min-width: 26px;
+    padding: 2px 6px;
+    background: rgba(0, 0, 0, .25); /* halbtransparent schwarz */
+    border-radius: 6px;
+    font-weight: 700;
 }
 
-.goalkeeper-button .gk-num{
-    display:inline-block;
-    min-width:26px;
-    padding:2px 6px;
-    background:rgba(0,0,0,.25); /* halbtransparent schwarz */
-    border-radius:6px;
-    font-weight:700;
+/* konsistente Farben */
+.goalkeeper-1 {
+    background: #009e90;
+    color: #fff;
 }
 
-/* Individuelle Farbanpassungen ---------------------------------- */
-.goalkeeper-1{
-    background:#009e90;       /* dunkleres Türkis → mehr Kontrast */
-    color:#fff;               /* bleibt weiß */
-}
-.goalkeeper-2{
-    background:#003c80;       /* leicht helleres Blau */
-    color:#fff;               /* bleibt weiß */
+.goalkeeper-1:hover {
+    background: #00b0a0;
 }
 
-/* Hover-States analog abdunkeln */
-.goalkeeper-1:hover{ background:#00b0a0; }
-.goalkeeper-2:hover{ background:#004d99; }
+.goalkeeper-2 {
+    background: #003c80;
+    color: #fff;
+}
+
+.goalkeeper-2:hover {
+    background: #004d99;
+}
+
 
 /* Match-Information – volle Breite, keine äußeren Ränder */
 .match-information {
@@ -188,18 +326,33 @@ button {
     box-sizing: border-box;
 }
 
+/* ------------------------------------------------------------------
+   MATCH-INFO-TABELLE – EINHEITLICHES LAYOUT (zusammengeführt)
+   ------------------------------------------------------------------ */
 #information-container table {
-    table-layout: fixed; /* gleichmässige Spalten */
+    width: 100%;
+    max-width: 620px;
+    table-layout: fixed; /* gleichmäßige Spaltenbreiten */
 }
 
-#information-container td:first-child {
-    text-align: right; /* Label rechtsbündig */
+/* Label-Spalten (1 & 3) rechtsbündig */
+#information-container td:nth-child(1),
+#information-container td:nth-child(3) {
+    text-align: right;
     padding-right: 6px;
 }
 
+/* Kompaktere Zeilenhöhe für alle Zellen */
+#information-container td {
+    line-height: 1.3;
+    padding-block: 2px; /* entspricht deinen padding-top/bottom: 2px */
+}
+
+/* Eingabefelder im Header-Block */
 #information-container input {
     line-height: 1.2;
     height: 1.65rem;
+    min-width: 120px;
 }
 
 /*  ----- 2.2 Timer-Sektion / Button Torwart ------------------------------------------------ */
@@ -208,6 +361,7 @@ button {
     gap: 32px;
     align-items: center;
     justify-content: flex-start;
+    margin-top: .5rem;
 }
 
 .timer {
@@ -219,6 +373,139 @@ button {
     display: flex;
     flex-direction: column;
     align-items: center;
+}
+
+/* Kompakte Timer-Karte (für kleine Inline-Boxen) */
+.timer--compact {
+    padding: .45rem .7rem; /* weniger Innenabstand */
+    min-width: unset; /* Breite durch Inhalt */
+    width: fit-content; /* Karte schrumpft an Inhalt */
+    gap: .35rem;
+}
+
+/* Karte explizit im Rival-Block mittig ausrichten */
+.gk-overview-btn-container.timer {
+    display: inline-flex; /* Karte soll nur so breit wie nötig sein */
+    align-items: center;
+    justify-content: center;
+}
+
+/* Farbvariante für Rival – nutzt die bestehende Theme-Variable */
+.timer--rival {
+    /* neutrale, aber satte Fläche sorgt für Kontrast in Light/Dark */
+    background: var(--accent-bg);
+    color: var(--text-light);
+    box-shadow: 0 2px 6px var(--shadow-color);
+    border-radius: 10px;
+}
+
+/* Die Rival-Taste in der Karte: Breite/Schattierung an Karte anpassen */
+.gk-overview-btn-container .gk-overview-toggle-btn {
+    /* Button fügt sich in die Karte ein, kein eigener Kasten-Schatten */
+    width: auto;
+    height: auto;
+    padding: .45rem .8rem;
+    box-shadow: none;
+    border: 2px solid rgba(0, 0, 0, .15);
+}
+
+/* Light/Dark: Rival-Taste hebt sich auf der Karte deutlich ab */
+.rivalkeeper-1 {
+    background: #455a64;
+    color: #fff;
+}
+
+/* neutral-slate */
+.rivalkeeper-1:hover {
+    background: #546e7a;
+}
+
+.rivalkeeper-2 {
+    background: #5c6bc0;
+    color: #fff;
+}
+
+/* indigo */
+.rivalkeeper-2:hover {
+    background: #6976d1;
+}
+
+/* Optional: auf sehr dunklem Hintergrund die Schrift minimal kräftiger */
+@media (prefers-color-scheme: dark) {
+    .timer--rival {
+        color: #fff;
+    }
+}
+
+/* =================== Rival-GK Toggle – feste Farbzustände =================== */
+/* Variablen – erlauben Theme-Tuning ohne Klassentausch */
+:root {
+    --rival-gk1: #1aa6b2; /* Türkisblau */
+    --rival-gk1-hover: #21b9c6;
+    --rival-gk2: #6b60d3; /* Violett/Indigo */
+    --rival-gk2-hover: #7a72de;
+}
+
+html[data-theme="dark"] {
+    --rival-gk1: #1694a0;
+    --rival-gk1-hover: #1fa9b5;
+    --rival-gk2: #5a52c7;
+    --rival-gk2-hover: #6a63d2;
+}
+
+.rival-toggle-card.timer {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: .65rem .9rem;
+    border-radius: 10px;
+    background: #004d1a;
+    color: #fff;
+}
+
+/* Beschriftung „Rival“ oben in der Kachel */
+.rival-toggle-card .timer-label {
+    font-size: .8rem;
+    opacity: .9;
+}
+
+.rival-toggle-card .gk-overview-toggle-btn.rivalkeeper-button {
+    /* gemeinsame Grundform wie bei deiner eigenen GK-Kapsel */
+    color: #fff;
+    border: 2px solid rgba(0, 0, 0, .15);
+    border-radius: 8px;
+    padding: .5rem 1rem;
+    font-weight: 600;
+    letter-spacing: .017em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background-color .25s ease;
+}
+
+/* Rival 1 */
+.rival-toggle-card .gk-overview-toggle-btn.rivalkeeper-button.rivalkeeper-1 {
+    background: var(--rival-gk1);
+}
+
+.rival-toggle-card .gk-overview-toggle-btn.rivalkeeper-button.rivalkeeper-1:hover {
+    background: var(--rival-gk1-hover);
+}
+
+/* Rival 2 */
+.rival-toggle-card .gk-overview-toggle-btn.rivalkeeper-button.rivalkeeper-2 {
+    background: var(--rival-gk2);
+}
+
+.rival-toggle-card .gk-overview-toggle-btn.rivalkeeper-button.rivalkeeper-2:hover {
+    background: var(--rival-gk2-hover);
+}
+
+/* Fokus gut sichtbar (Tastatur/Barrierefreiheit) */
+.rival-toggle-card .gk-overview-toggle-btn.rivalkeeper-button:focus-visible {
+    outline: 3px solid #fff;
+    outline-offset: 1px;
 }
 
 #game-time,
@@ -902,19 +1189,24 @@ textarea:focus {
 
 .tor-head {
     background: #ffcccc;
-    color:#fff;
+    color: #b30000;
 }
 
-/* visueller Trenner */
+/*!* visueller Trenner *!
 .divider-col {
     border-left: 3px double #000;
     border-right: 3px double #000;
     width: 1px;
-}
+}*/
 
 /* Zebrastreifen für Rows */
 .gk-stat-table tbody tr:nth-child(even) {
     background: var(--table-bg-even);
+}
+
+/* Summenzeile dezent hervorheben (ohne Theme-Bruch) */
+.gk-stat-table tr.gk-sum-row td:first-child { /* nur GK-Label fett */
+    font-weight: 700; /* bewusst sparsam, um Gesamtbild ruhig zu halten */
 }
 
 /* Farb-Highlights für neue Einträge (wird per JS gesetzt) */
@@ -1278,31 +1570,7 @@ button.btn-secondary:disabled {
 
 .app-title {
     display: none;
-    font-size: 1.5rem;
-    margin: 0 0 0.5rem;
     color: var(--text-light);
-}
-
-/* ----------  Info‑Tabelle  ---------------------------------- */
-#information-container table {
-    width: 100%;
-    max-width: 620px; /* wie im Mock‑up */
-    table-layout: fixed;
-}
-
-#information-container td:first-child {
-    text-align: right;
-    padding-right: 8px;
-    color: var(--text-light);
-}
-
-/* ----------  Timer/Switch/Score‑Zeile ----------------------- */
-.timer-container {
-    gap: 25px;
-    margin-top: .5rem;
-}
-
-.app-title {
     font-size: 1.5rem;
     font-weight: 700;
     margin: 0 0 0.75rem 0;
@@ -1310,81 +1578,6 @@ button.btn-secondary:disabled {
 
 .header-inner {
     padding-right: 1rem;
-}
-
-/* ------------------------------------------------------------
-   MATCH-TABELLE HEADER – 4-Spalten-Layout
-   ----------------------------------------------------------- */
-#information-container table {
-    table-layout: fixed;
-    width: 100%;
-}
-
-/* Beide Label-Spalten (1 & 3) rechtsbündig */
-#information-container td:nth-child(1),
-#information-container td:nth-child(3) {
-    text-align: right;
-    padding-right: 6px;
-}
-
-/* Optionale Feinanpassung: etwas weniger Zeilenhöhe */
-#information-container td {
-    line-height: 1.3;
-    padding-top: 2px;
-    padding-bottom: 2px;
-}
-
-/* ------------------------------------------------------------
-   HEADER – neues 4-Spalten-Layout
-   ----------------------------------------------------------- */
-#information-container table {
-    width: 100%;
-    table-layout: fixed;
-}
-
-/* Label-Spalten (1 & 3) rechtsbündig */
-#information-container td:nth-child(1),
-#information-container td:nth-child(3) {
-    text-align: right;
-    padding-right: 6px;
-}
-
-/* leichte Zeilenkompression */
-#information-container td {
-    line-height: 1.3;
-    padding-block: 2px;
-}
-
-.header {
-    padding: 4px 15px;
-}
-
-.timer-container {
-    margin-top: .5rem;
-}
-
-/* ------------------------------------------------------------
-   Header-Tabelle
-   ----------------------------------------------------------- */
-#information-container col:nth-child(1),
-#information-container col:nth-child(3) {
-    width: 23%;
-}
-
-#information-container col:nth-child(2),
-#information-container col:nth-child(4) {
-    width: 27%;
-}
-
-/* zusätzlicher Abstand zwischen Label & Input */
-#information-container td:nth-child(1),
-#information-container td:nth-child(3) {
-    padding-right: 8px;
-    white-space: nowrap;
-}
-
-#information-container input {
-    min-width: 120px;
 }
 
 .shot-table th,
@@ -1396,30 +1589,273 @@ button.btn-secondary:disabled {
 
 /* === Restore colour coding for Goal / Save rows =============== */
 .shot-row--goal td {
-    color:#ffd0d0;      /* pale red on dark bg */
+    color: #ffd0d0; /* pale red on dark bg */
 }
+
 .shot-row--save td {
-    color:#b9ffbd;      /* pale green on dark bg */
+    color: #b9ffbd; /* pale green on dark bg */
+}
+
+/* ========================= Rival-Accordion (nicht invasiv) ========================= */
+/* Der Wrapper existiert bereits: #rival-gk-stat-wrapper */
+#rival-gk-stat-wrapper.rival-accordion {
+    position: relative;
+}
+
+/* Schlankes, klickbares "Ohr" oben links – bleibt immer sichtbar */
+#rival-gk-stat-wrapper .rival-acc-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: var(--accent-bg, rgba(0, 0, 0, .55));
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.015em;
+    line-height: 1;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+    cursor: pointer;
+    user-select: none;
+    touch-action: manipulation;
+    padding: 0 10px;
+    border-bottom-right-radius: 10px;
+    opacity: 1; /* volle Deckkraft im Normalzustand */
+    transition: opacity .18s ease; /* sanfter Übergang */
+    min-width: 110px; /* Breite */
+    padding-inline: 8px; /* proportional zu vorher 12px etwas schmaler */
+    gap: 6px; /* leicht reduzierte Innenabstände */
+    height: 16px;
+    padding-block: 2px;
+}
+
+/* Aufgeklappt -> halbtransparent */
+#rival-gk-stat-wrapper .rival-acc-handle[aria-expanded="true"] {
+    opacity: .2; /* ≈50% == .5 Transparenz nur im offenen Zustand */
+}
+
+/* Fallback – falls statt aria das Wrapper-Flag genutzt wird              */
+#rival-gk-stat-wrapper:not(.is-collapsed) .rival-acc-handle {
+    opacity: .2;
+}
+
+/* Zugeklappt: Tabelle ausblenden, aber Handle sichtbar halten */
+#rival-gk-stat-wrapper.is-collapsed {
+    min-height: 44px; /* damit das "Ohr" Platz hat */
+}
+
+#rival-gk-stat-wrapper.is-collapsed .gk-stat-table {
+    display: none; /* harte Ausblendung – kein Layoutsprung */
+}
+
+/* Optional: kleine visuelle Trennung vom restlichen Inhalt */
+#rival-gk-stat-wrapper {
+    /* Wenn Ihre Theme-Variablen existieren, können Sie sie nutzen:
+       border: 1px solid var(--border-color, #DDD);*/
+}
+
+/* Chevron (Pfeil) etwas größer für bessere Erkennbarkeit */
+#rival-gk-stat-wrapper .rival-acc-handle .chev {
+    line-height: 1;
+    transition: transform .18s ease;
+    font-size: 14px;
+}
+
+#rival-gk-stat-wrapper [aria-expanded="false"] .chev {
+    transform: rotate(-90deg);
+}
+
+/* Hover/Active: leichte Aufhellung, ohne Theme zu brechen */
+#rival-gk-stat-wrapper .rival-acc-handle:hover {
+    filter: brightness(1.08);
+}
+
+#rival-gk-stat-wrapper .rival-acc-handle:active {
+    transform: translateY(1px);
+}
+
+/* Tastaturfokus klar sichtbar (WCAG) */
+#rival-gk-stat-wrapper .rival-acc-handle:focus-visible {
+    outline: 3px solid #fff;
+    outline-offset: 1px;
+}
+
+/* Im Zugeklappt-Zustand die Mindesthöhe ebenfalls halbieren */
+#rival-gk-stat-wrapper.is-collapsed {
+    min-height: 22px; /* vorher 44px */
+}
+
+/* Optional: Chevron minimal kleiner, damit es zentriert wirkt */
+#rival-gk-stat-wrapper .rival-acc-handle .chev {
+    font-size: 16px;
+}
+
+/* ----- kleine Quick-Buttons im Positions-Button ----- */
+.gk-overview-action-btn {
+    /* Das meiste kommt aus deinem bestehenden Stil; wir ergänzen nur Flex,
+       damit Label und Mini-Buttons hübsch stehen. */
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.gk-overview-action-btn .rival-label {
+    /* Label neutral; kann leer bleiben, wenn dein Button-Stil es schon abdeckt */
+    line-height: 1;
+}
+
+.gk-overview-action-btn .rival-mini {
+    /* Optisch kleine runde Tasten */
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid #0006;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    user-select: none;
+    cursor: pointer;
+    background: #fff; /* ggf. an dein Theme anpassen */
+}
+
+.gk-overview-action-btn .rival-mini--neg {
+    color: #c62828;
+}
+
+/* − = Parade (grün/rot je nach Theme) */
+.gk-overview-action-btn .rival-mini--pos {
+    color: #1b5e20;
+}
+
+/* + = Tor    */
+
+.gk-overview-action-btn.active-pos .rival-label {
+    /* Wenn Pos. ausgewählt → Label leicht hervorheben */
+    filter: brightness(1.2);
+}
+
+/* ———————————————————————————————————————————————————————————————
+   Rival-Panel: längeres deutsches Label sauber umbrechen/zentrieren
+   (wir scopen bewusst auf den GK-Overview-Container)
+   ——————————————————————————————————————————————————————————————— */
+.gk-overview-btn-container .timer-label {
+    white-space: normal;
+    line-height: 1.15;
+    text-align: center;
+    font-weight: 700;
+    /* responsiv skalieren (ohne globale Größen zu ändern) */
+    font-size: clamp(.75rem, 1.6vw, .9rem);
+}
+
+/* minimale Breite der Karte, damit die zwei Zeilen luftig wirken */
+.gk-overview-btn-container .timer {
+    min-width: 168px;
+}
+
+/* Elterncontainer des Canvas sollte relativ sein,
+   damit die absolute Positionierung sauber funktioniert */
+#court-canvas {
+    display: block;
+}
+
+#court-canvas.parent, .canvas-wrapper {
+    position: relative;
+}
+
+/* unser Overlay-Button */
+.sevenm-overlay-btn {
+    padding: 2px 6px;
+    font-size: 12px;
+    line-height: 1.2;
+    border-radius: 8px;
+    opacity: 0.95;
+}
+
+.sevenm-overlay-btn:disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* --- Stack sauber definieren -------------------------------------- */
+.canvas-container {
+    position: relative;
+}
+
+/* Das Hintergrundbild darf keine Klicks abfangen. */
+#background-image {
+    pointer-events: none;
+}
+
+/* falls vorhanden und rein dekorativ, Overlay durchklickbar machen. */
+#canvas-overlay {
+    pointer-events: none;
+}
+
+/* 7m-Overlay-Button muss über allen Canvas/Overlays liegen. */
+.sevenm-overlay-btn {
+    position: absolute; /* bleibt wie bisher */
+    z-index: 2147483647; /* praktisch "oberste" Ebene */
+    pointer-events: auto; /* sicherstellen, dass der Button klickbar bleibt */
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #rival-gk-stat-wrapper .rival-acc-handle {
+        transition: none !important;
+    }
+
+    #rival-gk-stat-wrapper .rival-acc-handle.hint {
+        animation: none !important;
+    }
+}
+
+/* Einmalige Mikro-Animation, um den Handle „entdeckbar“ zu machen */
+@keyframes rivalPulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+    }
+    50% {
+        transform: scale(1.03);
+        box-shadow: 0 4px 10px rgba(0, 0, 0, .45);
+    }
+    100% {
+        transform: scale(1);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+    }
+}
+
+#rival-gk-stat-wrapper .rival-acc-handle.hint {
+    animation: rivalPulse 1.2s ease-in-out 4; /* 4 Zyklen, nur beim ersten Besuch */
+}
+
+/* Optional: Dark/Light feinjustieren, falls Sie Theme-Variablen nutzen */
+html[data-theme="dark"] #rival-gk-stat-wrapper .rival-acc-handle {
+    background: var(--accent-bg, #0B7D3B);
 }
 
 /*  ==== 9. Dark-Mode ==================================================== */
 @media (prefers-color-scheme: dark) {
 
     :root {
-        --text-dark         : #ffffffd9;
-        --background-light  : #121212;
-        --background-medium : #1e1e1e;
-        --accent-gray       : #333333;
-        --shadow-color      : rgba(0,0,0,.70);
+        --text-dark: #ffffffd9;
+        --background-light: #121212;
+        --background-medium: #1e1e1e;
+        --accent-gray: #333333;
+        --shadow-color: rgba(0, 0, 0, .70);
 
-        --table-bg-even     : #1a1a1a;
-        --table-bg-odd      : #202020;
-        --table-font        : #dedede;
-        --table-head-bg     : #2a2a2a;
-        --table-head-font   : #f0f0f0;
+        --table-bg-even: #1a1a1a;
+        --table-bg-odd: #202020;
+        --table-font: #dedede;
+        --table-head-bg: #2a2a2a;
+        --table-head-font: #f0f0f0;
 
-        --shot-goal-bg      : #5c0000;
-        --shot-save-bg      : #005c2f;
+        --shot-goal-bg: #5c0000;
+        --shot-save-bg: #005c2f;
     }
 
     .header {
@@ -1461,6 +1897,7 @@ html[data-theme="dark"] {
     --shot-save-bg: #005c2f;
     --table-head-bg: #2a2a2a;
     --table-head-font: #f0f0f0;
+    --accent-bg: #0B7D3B;
 }
 
 html[data-theme="light"] {
@@ -1476,6 +1913,7 @@ html[data-theme="light"] {
     --shot-save-bg: #084;
     --table-head-bg: #d0d0d0;
     --table-head-font: #0a0a0a;
+    --accent-bg: #0A7C3E; /* konsistent zum Light-Theme */
 }
 
 #theme-slider {
@@ -1487,28 +1925,52 @@ html[data-theme="light"] {
 html[data-theme="light"] {
 
     /* 1) Etwas dunklerer Hintergrund für Zebra-Streifen / Tabellenkopf */
-    --table-bg-even : #e8e8e8;
-    --table-bg-odd  : #ffffff;
-    --table-head-bg : #cfcfcf;
+    --table-bg-even: #e8e8e8;
+    --table-bg-odd: #ffffff;
+    --table-head-bg: #cfcfcf;
 
     /* 2) Sättigere „graue“ Linien / Texte */
-    --accent-gray   : #b5b5b5; /* Rahmenfarbe */
-    --table-font    : #222222; /* Textfarbe in Tabellenzellen */
+    --accent-gray: #b5b5b5; /* Rahmenfarbe */
+    --table-font: #222222; /* Textfarbe in Tabellenzellen */
 
     /* 3) Etwas dunklere Akzentfarben */
-    --shot-goal-bg  : #700;
-    --shot-save-bg  : #063;
+    --shot-goal-bg: #700;
+    --shot-save-bg: #063;
 }
 
 /* Sättigere Farben für Zahlen in Spezialzeilen */
-html[data-theme="light"] .shot-row--goal  td { color:#ff6d6d; } /* leuchtend rot */
-html[data-theme="light"] .shot-row--save  td { color:#2ecc71; } /* leuchtend grün */
+html[data-theme="light"] .shot-row--goal td {
+    color: #ff6d6d;
+}
 
+/* leuchtend rot */
+html[data-theme="light"] .shot-row--save td {
+    color: #2ecc71;
+}
+
+/* leuchtend grün */
 html[data-theme="light"] .gk-stat-table,
 html[data-theme="light"] .gk-stat-table td,
 html[data-theme="light"] .shot-table,
 html[data-theme="light"] .shot-table td {
-    border-color:#b5b5b5;
+    border-color: #b5b5b5;
+}
+
+/* Optische Trennlinie an der definierten Spalte */
+.shot-table td.is-divider {
+    border-left: 2px solid #0002;
+    border-right: 2px solid #0002;
+    padding-left: 0;
+    padding-right: 0;
+    width: 4px; /* optional: schmale Spalte */
+}
+
+td.is-divider, th.is-divider {
+    border-left: 2px solid #0002;
+    border-right: 2px solid #0002;
+    padding-left: 0;
+    padding-right: 0;
+    width: 4px;
 }
 
 /* Ende src/css/styles.css */

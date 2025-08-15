@@ -20,8 +20,6 @@ if (!self.idb) {
 }
 const {openDB} = idb;
 
-const ZERO = {1:{1:0,2:0},2:{1:0,2:0}};
-
 /* ==== 2. Default-Areas definieren ======================================== */
 /**
  * Default-Schusszonen (Shot-Areas) passend zum Spielfeld-Layout.
@@ -175,15 +173,14 @@ export async function initDB() {
             if (!db.objectStoreNames.contains(STORE_AREAS)) {
                 const areasStore = db.createObjectStore(STORE_AREAS);
                 areasStore.put(DEFAULT_SHOT_AREAS, 'shotAreas');
-                areasStore.put(DEFAULT_GOAL_AREAS, 'goalAreas'); // enthält id 10 (7 m)
+                areasStore.put(DEFAULT_GOAL_AREAS, 'goalAreas');
 
                 /* Defaultwerte für *-Zählern = 0 anlegen */
                 const zeroObj = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
                 areasStore.put(zeroObj, ASS_KEY);
                 areasStore.put(zeroObj, SEVENG6_KEY);
                 areasStore.put(zeroObj, TOR_KEY);
-
-
+                areasStore.put(zeroObj, TF_KEY);
             }
 
             /* ────────────────────────────────────────────────────────────
@@ -193,9 +190,6 @@ export async function initDB() {
                 const miStore = db.createObjectStore(
                     STORE_MATCH,
                     {keyPath: 'id'}
-
-
-
                 );
                 ['competition', 'team', 'date', 'location',
                     'opponent', 'halftime', 'fulltime']
@@ -278,11 +272,9 @@ export async function getShots() {
 /** Fügt einen einzelnen Shot ein. */
 export async function addShot(shot) {
     const db = await initDB();
-    // await db.transaction(STORE_SHOTS, 'readwrite').store.add(shot);
-    const id = await db
+    return await db
         .transaction(STORE_SHOTS, 'readwrite')
         .store.add(shot); // Rückgabewert ist die neue PK
-    return id;
 }
 
 /** Fügt mehrere Shots gebündelt hinzu (z.B. Offline-Sync). */
@@ -432,7 +424,6 @@ export async function setTF(obj) {
     await tx.store.put(obj, TF_KEY);
     await tx.done;
 }
-
 
 
 /**

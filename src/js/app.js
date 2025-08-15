@@ -1,10 +1,19 @@
 // =====================================================================
-// src/js/app.js – Haupt-Logik der PWA
+// src/js/app.js – Hauptlogik der PWA (Erfassen, Visualisieren, Aggregieren)
 // =====================================================================
+
+/* global XLSX */ // ← teilt ESLint/VSC mit, dass XLSX eine Browser-Global ist
 
 // == 1. Modul-Importe ==================================================
 import './header.js';
-
+import {
+    ALPHA_GOAL_AREAS,
+    ALPHA_SHOT_LEGACY,
+    ALPHA_SHOT_RECT,
+    ALPHA_STROKE_GOAL_AREAS,
+    ALPHA_STROKE_SHOT_LEGACY,
+    ALPHA_STROKE_SHOT_RECT
+} from './config.js';
 import {
     addShot,
     bulkAddShots,
@@ -31,7 +40,6 @@ import {
     setTF,
     setTor,
 } from './db.js';
-
 import {
     drawMarker,
     drawShotAreaLegacy,
@@ -41,7 +49,10 @@ import {
     relToCanvas
 } from './canvasUtils.js';
 
-/* --- 1.1 Farb-Konstanten für die verschiedenen Arten von Markern --- */
+/* --- Farb-/Linienkonstanten für Canvas-Rendering ---------------------
+   COLOR_* steuern Marker- und Linienfarben; WIDTH/BLUR/SHADOW die Linie
+   für optionale Verbindungslinien (Show Lines).
+--------------------------------------------------------------------- */
 const COLOR_TEMP_MARKER = '#888';
 const COLOR_GOAL_TOR = '#ff0000';
 const COLOR_GOAL_SAVE = '#00b050';
@@ -68,13 +79,19 @@ export const GOALKEEPERS = {
     2: {number: 80, name: 'Portner'}
 };
 
+// 2. Halbzeit nur, wenn beide Bedingungen erfüllt sind:
+// (a) Zeit >= 30:00 und (b) der Nutzer hat nach HZ-Pause erneut „Start“ gedrückt.
 function currentHalf() {
-    return gameSeconds < HALF_LENGTH ? FIRST_HALF : SECOND_HALF;
+    if (gameSeconds >= HALF_LENGTH && secondHalfStarted) return SECOND_HALF;
+    return FIRST_HALF;
 }
 
-/* =====================================================================
- * Alle Halbzeit-abhängigen Badges & Button-States neu zeichnen
- * ===================================================================*/
+/**
+ * Aktualisiert alle UI-Elemente, die von Halbzeit und aktivem Torwart abhängen:
+ * – Badges (Ass, 7g6, Tor, TF)
+ * – Aggregations-Tabelle (eigene Keeper)
+ * Wird aufgerufen z. B. beim Halbzeitwechsel oder GK-Wechsel.
+ */
 function refreshHalfDependentUI() {
     updateAssBadge();
     updateSevenG6Badge();
@@ -101,9 +118,9 @@ function gkNumLabel(gkId) {
 function updateAssBadge() {
     const gk = currentGoalkeeper;
     const half = currentHalf(); // 1. oder 2. Halbzeit
-
-    /* ---------- Badge-Markup -------------------------------------- */
-    document.querySelector('#ass-value').innerHTML =
+    const box = document.querySelector('#ass-value');
+    if (!box) return;
+    box.innerHTML =
         `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${ass[gk][half]}</div>`;
 
@@ -118,8 +135,9 @@ function updateAssBadge() {
 function updateSevenG6Badge() {
     const gk = currentGoalkeeper;
     const half = currentHalf();
-
-    document.querySelector('#seven-g6-value').innerHTML =
+    const box = document.querySelector('#seven-g6-value');
+    if (!box) return;
+    box.innerHTML =
         `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${sevenG6[gk][half]}</div>`;
 
@@ -133,8 +151,9 @@ function updateSevenG6Badge() {
 function updateTorBadge() {
     const gk = currentGoalkeeper;
     const half = currentHalf();
-
-    document.querySelector('#tor-value').innerHTML =
+    const box = document.querySelector('#tor-value');
+    if (!box) return;
+    box.innerHTML =
         `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${torCount[gk][half]}</div>`;
 
@@ -148,8 +167,9 @@ function updateTorBadge() {
 function updateTFBadge() {
     const gk = currentGoalkeeper;
     const half = currentHalf();
-
-    document.querySelector('#tf-value').innerHTML =
+    const box = document.querySelector('#tf-value');
+    if (!box) return;
+    box.innerHTML =
         `<div style="font-size:.85em">${gkNumLabel(gk)}<br>${half}. HZ</div>
          <div style="font-weight:700">${tfCount[gk][half]}</div>`;
 
@@ -158,18 +178,20 @@ function updateTFBadge() {
 }
 
 /* --- 1.2 Spezial-Konstante: virtuelle Goal-Area für 7 m -------- */
-export const DUMMY_GOAL_ID = 999;
-
-/* ----------------------------------------------
-  Zuordnung shotArea → Statistik-Spalte
------------------------------------------------- */
-/* Mapping Shot-Area → Statistik-Spalte */
+/* --------------------------------------------------------------
+   Zuordnung von Wurfkategorie → Statistikspalte.
+   – Synonyme abgedeckt (z. B. 'durchbruch' → 'km')
+   – historische Bezeichnungen normalisiert (Kreis = 'km', Durchbruch zählt wie 'km')
+-------------------------------------------------------------- */
 const AREA_TO_COL = {
     rl: 'rl', rm: 'rm', rr: 'rr',
     la: 'la', ra: 'ra',
     dl: 'dl', dm: 'dm', dr: 'dr',
     km: 'km',
-    gegenstoss: 'gs', '7m': '7m'
+    db: 'km', durchbruch: 'km',
+    gegenstoss: 'gs',
+    gs: 'gs',
+    '7m': '7m'
 };
 
 /* ---- Paraden (links) ------------------- */
@@ -190,29 +212,34 @@ const RIGHT_COL_MAP = {
     gs: 27, '7m': 28
 };
 
-// == 2. Globale Runtime-States =========================================
-// shots = **einzige** Quelle – egal ob online oder offline.
-// Persistente Shots besitzen eine id (PK aus IndexedDB)
-// Offline-Shots haben noch **keine** id (undefined)
-let shots = []; // alle Würfe – synchron & unsynchron
+/* == Globale Laufzeit-States =========================================
+   Alle erfassten Würfe werden in `shots` gehalten (Quelle der Wahrheit).
+   Persistente Einträge (IndexedDB) haben eine `id`, offline erfasste noch nicht.
+==================================================================== */
+let shots = []; // alle Würfe – synchron & un-synchron
 let shotAreas = []; // Liste der Shot-Areas (Wurfzonen)
 let goalAreas = []; // Liste der Goal-Areas (Torzonen)
 
 /* ======= RIVAL GK Tracking ========================================= */
-let rivalShots = []; // Alle Würfe gegnerischer Keeper
-let currentRivalGoalkeeper = 1; // Start = „Torwart 1“
+
+let currentRivalGoalkeeper = 1; // Start = Torwart 1
 let currentRivalPos = null; // zuletzt geklickte Wurfposition
 
-/* Buttons erst aktivieren, sobald eine Position gewählt ist */
+// Buttons erst aktivieren, sobald eine Position gewählt ist
 const enableRivalActionBtns = onOff => {
-    ['goal-btn-rival', 'goalkeeper-save-btn-rival',
-        'cancel-btn-rival', 'undo-btn-rival'].forEach(id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.disabled = !onOff;
-        el.classList.toggle('active', onOff);
-    });
+    void onOff; // bewusst ungenutzt: API stabil halten, Aufrufer dürfen weiterhin true/false übergeben
+    updateRivalUndoState();
 };
+
+function updateRivalUndoState() {
+    const hasRows = shots.some(
+        s => s.team === 'rival' && (s.goalkeeperId ?? 1) === currentRivalGoalkeeper
+    );
+    const undo = document.getElementById('undo-btn-rival');
+    if (!undo) return;
+    undo.disabled = !hasRows;
+    undo.classList.toggle('active', hasRows);
+}
 
 // --- Caches --------------------
 let shotAreaMap = new Map(); // id → das entsprechende Zonenobjekt
@@ -223,6 +250,9 @@ let currentStep = 1;
 let currentShotPosition = null; // aktuell ausgewählte Shot-Area
 let currentExactShotPos = null; // genaues rel. Koordinatenobjekt {x,y}
 let currentExactGoalPos = null; // genaues rel. Koordinatenobjekt {x,y}
+
+/* Ausgewählte Tor-Zone (per 2. Klick), dauerhaft bis Finish/Clear */
+let currentGoalArea = null; // {id,name,coords,...} oder null
 
 /* UI-Modi */
 let showShotLines = false; // toggelt Verbindungslinien ein/aus
@@ -237,20 +267,56 @@ let gameRunning = false; // true = Timer läuft
 
 /* Table cols */
 const COLS = 33;
+
 /**
  * Globale Variable für den aktuell gewählten Torwart.
  * Initial ist Torwart 1 aktiv.
  */
 let currentGoalkeeper = 1;
 
+/* ------------------------------------------------------------------
+   Halbzeit-Steuerung: 2. HZ startet erst nach erneutem Start-Klick
+   ------------------------------------------------------------------ */
+let secondHalfStarted = false; // persistent via localStorage
+
+// Aus localStorage laden (robust gegen Private-Mode)
+function loadSecondHalfStarted() {
+    try {
+        secondHalfStarted = localStorage.getItem('secondHalfStarted') === '1';
+    } catch {
+    }
+}
+
+// In localStorage speichern
+function saveSecondHalfStarted() {
+    try {
+        localStorage.setItem('secondHalfStarted', secondHalfStarted ? '1' : '0');
+    } catch {
+    }
+}
+
 // == 3. Boot-Strap =====================================================
 document.addEventListener('DOMContentLoaded', () =>
     initApp().catch(err => console.error('[BOOT] Fehler:', err))
 );
 
+/**
+ * Initialisiert die App einmalig:
+ * – IndexedDB laden (Shots, Zähler, Areas, Settings)
+ * – Canvas/Timer/UI aufbauen, Event-Bindings setzen
+ * – erst eigene Sichten rendern, dann Rival (konsistente Reihenfolge)
+ * – Service Worker und Online/Offline-Behandlung aktivieren
+ */
 async function initApp() {
+    /* IndexedDB initialisieren */
+    await initDB();
+
+    // --- 2. HZ-Flag aus localStorage vor Timer/UI laden -----------------------
+    loadSecondHalfStarted();
+
     // _____ Ass __________________________________________________________________
     ass = await getAss();
+
     // 2) Sicherstellen, dass die erwartete Struktur vorhanden ist
     if (!ass || typeof ass !== 'object') ass = {};
     for (const gk of [1, 2]) {
@@ -269,10 +335,6 @@ async function initApp() {
         decBtn.disabled = ass[currentGoalkeeper][currentHalf()] === 0;
     }
 
-    /* 3.1 IndexedDB initialisieren */
-    await initDB();
-
-    // 3.1.1
     currentGoalkeeper = await getCurrentGoalkeeper();
 
     // _____ 7g6-Zähler __________________________________________________________________
@@ -305,6 +367,10 @@ async function initApp() {
 
     /* _____ TF-Zähler _____________________________________________________________ */
     tfCount = await getTF();
+
+    /* Defensive – falls DB leer ist oder falscher Typ geliefert wird */
+    if (!tfCount || typeof tfCount !== 'object') tfCount = {};
+
     for (const gk of [1, 2]) {
         tfCount[gk] ??= {};
         tfCount[gk][1] = Number(tfCount[gk][1] ?? 0);
@@ -321,10 +387,14 @@ async function initApp() {
     const g6Dec = document.getElementById('seven-g6-decrement');
     if (g6Dec) g6Dec.disabled = sevenG6[currentGoalkeeper][currentHalf()] === 0;
 
-    /* 3.2 Stammdaten (Areas + bereits existierende Shots) laden */
+    /* Stammdaten (Areas + bereits existierende Shots) laden */
     const areas = await getAreas();
-    shotAreas = areas.shotAreas;
-    goalAreas = areas.goalAreas;
+
+    // Defensive – falls DB leer ist, mit leeren Arrays weiterarbeiten
+    const safeAreas = areas ?? {shotAreas: [], goalAreas: []};
+
+    shotAreas = safeAreas.shotAreas;
+    goalAreas = safeAreas.goalAreas;
 
     // lookup maps
     shotAreaMap = new Map(shotAreas.map(a => [a.id, a]));
@@ -332,7 +402,7 @@ async function initApp() {
 
     shots = await getShots();
 
-    /* 3.3 Canvas + Timer + UI */
+    /* Canvas + Timer + UI */
     initCanvas();
     await initTimers();
     updateStatsHeading(); // korrigiert Überschrift gleich beim Start
@@ -347,50 +417,181 @@ async function initApp() {
     updateStatistics(); // Zeichnet erstes Stats-Bild, noch ohne Shots
     drawAreas(); // Rendert alle Areas (Shot + Goal)
 
-    /* 3.4 Online/Offline-Sync */
+    /* Online/Offline-Sync */
     window.addEventListener('online', handleConnectionChange);
     window.addEventListener('offline', handleConnectionChange);
     await handleConnectionChange();
 
-    /* 3.5 Service-Worker-Lifecycle */
+    /* Service-Worker-Lifecycle */
     initServiceWorkerLifecycle();
     updateButtonStates();
     renderShotTable();
+    renderGkOverviewTable();
     enableRivalActionBtns(false);
 
     /* ---- Rival-GK aus IndexedDB laden --------------------------- */
     const rivalToggle = document.querySelector('.gk-overview-toggle-btn');
 
     if (rivalToggle) {
-        rivalToggle.textContent = `Torwart ${currentRivalGoalkeeper}`;
-
+        updateRivalGoalkeeperButton();
     }
-    renderRivalShotTable();
 
+    renderRivalShotTable();
+    renderRivalGKStatTable();
+    updateRivalUndoState();
+    applySmallAbbrevStyling();
+    initRivalAccordion();
+}
+
+/**
+ * Initialisiert das Rival-Accordion:
+ * – Kleiner Handle-Button links oben am Tabellen-Wrapper
+ * – Chevron + Label im Handle (kompakt, mobile-freundlich)
+ * – Zustand (auf/zu) in localStorage persistiert
+ * – A11y: aria-expanded, Tastaturbedienung (Enter/Space)
+ */
+function initRivalAccordion() {
+    // Wrapper & Tabelle greifen; defensiv beenden, wenn nicht vorhanden
+    const wrapper = document.getElementById('rival-gk-stat-wrapper');
+    const table = document.getElementById('rival-gk-stat-table');
+    if (!wrapper || !table) return;
+
+    // -- Basis: Wrapper für Positionierung vorbereiten (CSS nutzt dies)
+    wrapper.classList.add('rival-accordion');
+
+    // -- Klick-Hotspot/Handle oben links anlegen (kleine Fläche, auch mobile-tauglich)
+    const handle = document.createElement('button');
+    handle.type = 'button';
+    handle.className = 'rival-acc-handle';
+    handle.setAttribute('aria-label', 'Rival-Statistik ein-/ausklappen'); // a11y
+    handle.setAttribute('aria-expanded', 'false');
+    handle.title = 'Rival-Statistik öffnen';
+
+    // handle.textContent = '▸';
+    // Pfeil-Rechts = zugeklappt
+    handle.innerHTML = `<span class="chev" aria-hidden="true">▸</span>
+    <span class="lbl">Rival-Statistik</span>`;
+
+    wrapper.appendChild(handle);
+
+    // den initialen Zustand aus localStorage auslesen
+
+    // Persistenz-Keys für Accordion-Zustand + einmalige „Hint“-Markierung
+    const LS_KEY = 'rivalAccordionOpen';
+    const LS_SEEN = 'rivalAccordionSeen';
+
+    // localStorage defensiv lesen (z. B. iOS Private Mode)
+    let initiallyOpen = false;
+    try {
+        initiallyOpen = (localStorage.getItem(LS_KEY) === '1');
+    } catch {
+    }
+
+
+    if (!initiallyOpen) {
+        wrapper.classList.add('is-collapsed');
+        handle.setAttribute('aria-expanded', 'false');
+        handle.title = 'Rival-Statistik öffnen';
+
+        // Chevron im vorhandenen <span class="chev"> setzen (Markup nicht zerstören)
+        const chev = handle.querySelector('.chev');
+        if (chev) chev.textContent = '▸';
+    } else {
+        handle.setAttribute('aria-expanded', 'true');
+        handle.title = 'Rival-Statistik schließen';
+
+        // Chevron im vorhandenen <span class="chev"> setzen (Markup nicht zerstören)
+        const chev = handle.querySelector('.chev');
+        if (chev) chev.textContent = '▾';
+    }
+
+    // Einmalige Hint-Animation anzeigen, wenn der Nutzer das Accordion noch nie geöffnet hat
+    try {
+        if (localStorage.getItem(LS_SEEN) !== '1') {
+            handle.classList.add('hint'); // CSS-Animation läuft (siehe .rival-acc-handle.hint)
+        }
+    } catch {
+        /* localStorage evtl. deaktiviert/gefüllt – stillschweigend ignorieren */
+    }
+
+    // -- Toggle-Funktion (Klasse + a11y + persistenter Zustand)
+    const toggle = () => {
+        const collapsed = wrapper.classList.toggle('is-collapsed');
+        handle.setAttribute('aria-expanded', String(!collapsed));
+        handle.title = collapsed ? 'Rival-Statistik öffnen' : 'Rival-Statistik schließen';
+
+        const chevEl = handle.querySelector('.chev'); // robust gegen fehlendes Markup
+        if (chevEl) chevEl.textContent = collapsed ? '▸' : '▾';
+
+        try {
+            localStorage.setItem(LS_KEY, collapsed ? '0' : '1');
+            if (!collapsed) {
+                localStorage.setItem(LS_SEEN, '1');
+                handle.classList.remove('hint');
+            }
+        } catch {
+        }
+    };
+
+    // -- Events: Klick/Touch auf den Handle, sowie Tastatur (Enter/Space)
+    handle.addEventListener('click', toggle);
+    handle.addEventListener('keydown', (e) => {
+        // Space in älteren Browsern als 'Spacebar' benannt; e.code ist stabil.
+        const isSpace = e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space';
+        if (e.key === 'Enter' || isSpace) {
+            e.preventDefault();
+            toggle();
+        }
+    });
+
+    wrapper.addEventListener('click', (e) => {
+        if (e.target !== wrapper) return; // andere Kinder ignorieren (z.B. Tabelle)
+        const r = wrapper.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top;
+        if (x <= 44 && y <= 28) toggle();
+    }, true);
 }
 
 // == 4. Canvas-Initialisierung =========================================
+/** Bindet Canvas und Hintergrundbild; setzt Größe und Redraw-Hooks (Resize/Image-Load). */
 function initCanvas() {
     canvas = document.getElementById('court-canvas');
+    if (!canvas) return;
     ctx = canvas.getContext('2d');
+
     const bg = document.getElementById('background-image');
-    bg.complete ? setCanvasSize() : (bg.onload = setCanvasSize);
+    if (!bg) {
+        setCanvasSize();
+        ensureSevenMQuickBtn();
+    } else {
+        bg.complete ? (setCanvasSize(), ensureSevenMQuickBtn()) :
+            (bg.onload = () => {
+                setCanvasSize();
+                ensureSevenMQuickBtn();
+            });
+    }
 
     window.addEventListener('resize', setCanvasSize);
 }
 
+/**
+ * Passt die Canvas-Backing-Size exakt an den sichtbaren Viewport an
+ * (nicht Container-CSS-Werte) und triggert einen vollständigen Redraw.
+ */
 function setCanvasSize() {
-    const box = document.querySelector('.background-container');
-    canvasWidth = box.clientWidth;
-    canvasHeight = box.clientHeight;
+    const r = canvas.getBoundingClientRect();
+    canvasWidth = Math.round(r.width);
+    canvasHeight = Math.round(r.height);
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
 
-    /* Wichtig: globale Kopie auf window hängen, damit Hit-Test darauf zugreifen kann */
     window.canvasWidth = canvasWidth;
     window.canvasHeight = canvasHeight;
 
     drawAreas();
+
+    // ▼ Nach dem Redraw die 7m-Schaltfläche passend verschieben
+    placeSevenMQuickBtn();
 }
 
 // == 5. Event-Binding & UI-Helper =======================================
@@ -399,15 +600,91 @@ const on = (id, ev, fn) => {
     if (el) el.addEventListener(ev, fn);
 };
 
+function upgradeRivalPosButtons() {
+    // Root-Container der Positions-Buttons
+    const container = document.querySelector('.gk-overview-positions-btns-container');
+    if (!container) return;
+
+    // Alle bestehenden Positions-Buttons greifen
+    const btns = container.querySelectorAll('.gk-overview-action-btn');
+
+    btns.forEach(btn => {
+        // Ursprüngliches Label sichern (z. B. "RA")
+        const label = (btn.textContent || '').trim();
+        if (!label) return;
+
+        // Normalisierte Positions-ID einmalig auf das Button-Element legen
+        // (so sind wir robust, auch wenn das HTML innen später erweitert wird)
+        btn.dataset.pos = label.toLowerCase();
+
+        if (btn.dataset.upgraded === '1') return;
+
+        btn.innerHTML = `
+          <span class="rival-mini rival-mini--neg" data-quick="save" aria-label="Parade">P</span>
+          <span class="rival-label">${label}</span>
+          <span class="rival-mini rival-mini--pos" data-quick="goal" aria-label="Tor">T</span>
+        `;
+
+        btn.dataset.upgraded = '1';
+    });
+
+    if (!container.dataset.quickBound) {
+        container.addEventListener('click', (e) => {
+            // Prüfen, ob auf einen Mini-Button (−/+) geklickt wurde
+            const quickEl = e.target.closest('.rival-mini[data-quick]');
+            if (!quickEl) return; // normaler Klick → Pos.-Auswahl (bestehende Logik)
+            e.stopPropagation(); // verhindert Auslösen der Host-Button-Logik
+
+            // Zugehörigen Host-Button und seine Pos.-ID ermitteln
+            const hostBtn = quickEl.closest('.gk-overview-action-btn');
+            if (!hostBtn) return;
+            const pos = hostBtn.dataset.pos;
+            if (!pos) return;
+
+            // Gewählte Position kurzzeitig setzen und Quick-Shot speichern
+            //  − data-quick="save" → Parade
+            //  + data-quick="goal" → Tor
+            currentRivalPos = pos;
+            const isSave = quickEl.dataset.quick === 'save';
+
+            void finishRivalShot(isSave); // bewusst "fire-and-forget": UI-Flow nicht blockieren
+        });
+        container.dataset.quickBound = '1';
+    }
+}
+
+function pruneLegacyRivalButtons() {
+    // IDs der veralteten Buttons
+    const LEGACY_IDS = ['goal-btn-rival', 'goalkeeper-save-btn-rival', 'cancel-btn-rival'];
+
+    // Buttons (falls vorhanden) entfernen → kein Fokus, keine Tastatur-Reihenfolge
+    LEGACY_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.parentElement) el.parentElement.removeChild(el);
+    });
+}
+
+/**
+ * Verdrahtet alle UI-Events:
+ * – Spieluhr (Start/Pause/Reset, ±-Sekunden)
+ * – Canvas-Klickworkflow (Wurf → Torzone)
+ * – Ergebnis-Buttons (Tor/Gehalten/Abbrechen/Undo)
+ * – Optionen (Show Lines)
+ * – Zähler-Buttons (Ass/7g6/Tor/TF)
+ * – GK-Wechsel (eigen & Rival)
+ * – Export / Clear All / Offline-Hinweise
+ */
 function setupEventListeners() {
     /* Timer */
     on('start-pause-btn', 'click', toggleGameTimer);
     on('reset-btn', 'click', resetGameTimer);
 
+    pruneLegacyRivalButtons();
+
     /* Manuelle ±-Buttons */
     on('rewind-fast-btn', 'click', () => adjustGameSeconds(-10)); // «<<
-    on('rewind-btn', 'click', () => adjustGameSeconds(-1)); //  «
-    on('forward-btn', 'click', () => adjustGameSeconds(+1)); //  »
+    on('rewind-btn', 'click', () => adjustGameSeconds(-1)); // «
+    on('forward-btn', 'click', () => adjustGameSeconds(+1)); // »
     on('forward-fast-btn', 'click', () => adjustGameSeconds(+10)); // »»
 
     if (canvas) canvas.addEventListener('click', handleCanvasClick);
@@ -455,30 +732,27 @@ function setupEventListeners() {
     /* Torwart-Toggle initialisieren */
     changeGoalkeeper().catch(err => console.error('[GK] Fehler:', err));
 
-
     /* --------------------------------------------------
      * RIVAL – Positions- & Action-Buttons
      * -------------------------------------------------- */
+    upgradeRivalPosButtons();
+
     const rivalPosBtns = document
         .querySelectorAll('.gk-overview-positions-btns-container .gk-overview-action-btn');
 
     rivalPosBtns.forEach(btn => {
         btn.addEventListener('click', () => {
-            /* 1 Position merken */
-            currentRivalPos = btn.textContent.trim().toLowerCase(); // 'ra', 'km' …
+            // Position jetzt stabil aus data-Attribut lesen (robust gegen innerHTML-Änderungen)
+            currentRivalPos = btn.dataset.pos; // 'ra', 'km' …
 
-            /* 2 UI: Aktiv-Highlight */
+            // UI-Highlight konsistent setzen
             rivalPosBtns.forEach(b => b.classList.toggle('active-pos', b === btn));
 
-            /* 3 Aktion-Buttons freischalten */
             enableRivalActionBtns(true);
         });
     });
 
     /* Action-Buttons */
-    on('goal-btn-rival', 'click', () => finishRivalShot(false));
-    on('goalkeeper-save-btn-rival', 'click', () => finishRivalShot(true));
-    on('cancel-btn-rival', 'click', resetRivalProcess);
     on('undo-btn-rival', 'click', undoLastRivalShot);
 
     /* GK-Toggle (Rival) */
@@ -486,25 +760,32 @@ function setupEventListeners() {
     if (rivalToggle) {
         rivalToggle.addEventListener('click', async () => {
             currentRivalGoalkeeper = currentRivalGoalkeeper === 1 ? 2 : 1;
-            rivalToggle.textContent = `Torwart ${currentRivalGoalkeeper}`;
+            updateRivalGoalkeeperButton();
+            resetRivalProcess();
             renderRivalShotTable();
+            renderRivalGKStatTable();
             try {
                 await setCurrentRivalGoalkeeper(currentRivalGoalkeeper);
             } catch (e) {
                 console.warn('[RIVAL-GK] persist failed', e);
             }
+            updateRivalUndoState();
         });
     }
 }
 
 /* ===================================================================
- *  RIVAL : Shot fertigstellen
+ * RIVAL : Shot fertigstellen
  * ===================================================================*/
+/** Schließt einen Rival-Wurf ab, persistiert (IDB) und aktualisiert Tabellen. */
 async function finishRivalShot(isSave) {
     if (!currentRivalPos) { // keine Pos. gewählt
         showToast('Erst eine Wurfposition wählen!', 'offline');
         return;
     }
+
+    // HZ für Rival-Shot identisch bestimmen (DRY-Helper)
+    const halfAtShot = computeHalfAtNow();
 
     const shot = {
         timestamp: new Date().toISOString(),
@@ -514,57 +795,62 @@ async function finishRivalShot(isSave) {
         shotCategory: currentRivalPos, // z.B. 'ra'
         isGoalkeeperSave: isSave,
         goalkeeperId: currentRivalGoalkeeper,
-        team: 'rival' // einziges Unterscheidungsmerkmal
+        team: 'rival',
+        half: halfAtShot
     };
 
     /* sofort persistieren, falls online */
-    if (navigator.onLine) {
-        shot.id = await addShot(shot); // bestehende DB-API weiter nutzen
+    try {
+        shot.id = await addShot(shot); // IndexedDB
+    } catch (e) {
+        console.warn('[SHOT] IDB write failed', e);
     }
-    shots.push(shot); // in globales Array
-    rivalShots.push(shot); // separat für schnelle Filterung
 
-    renderRivalShotTable(); // Mini-Tabelle rechts
+    shots.push(shot); // in globales Array
+
+    renderRivalShotTable();
+    renderRivalGKStatTable();
     resetRivalProcess();
 }
 
-/* Reset nur für den Workflow des Rivals */
+/** Setzt den Rival-Erfassungsworkflow zurück (keine Pos. ausgewählt, Buttons aus). */
 function resetRivalProcess() {
     currentRivalPos = null;
     enableRivalActionBtns(false);
     document
         .querySelectorAll('.gk-overview-action-btn')
         .forEach(b => b.classList.remove('active-pos'));
+    updateRivalUndoState();
 }
 
+/** Macht den letzten Wurf des aktuell gewählten Rival-Keepers rückgängig (RAM + IDB). */
 function undoLastRivalShot() {
-    const last = rivalShots.pop();
-    if (!last) {
+    // suchen den letzten rival shot
+    let i = shots.length - 1;
+    while (i >= 0 && !(shots[i].team === 'rival' && (shots[i].goalkeeperId ?? 1) === currentRivalGoalkeeper)) i--;
+    if (i < 0) {
         showToast('Kein Eintrag zum Rückgängigmachen', 'offline');
         return;
     }
-    /* auch aus globaler shots-Liste entfernen */
-    const idx = shots
-        .findIndex(s => s.timestamp === last.timestamp);
-    if (idx > -1) shots.splice(idx, 1);
 
-    if (last.id) { // schon in DB?
-        deleteShot(last.id).catch(() => console.warn('[RIVAL] DB-Undo fehlgeschlagen'));
-    }
+    const last = shots.splice(i, 1)[0];
+    if (last.id) deleteShot(last.id).catch(() => console.warn('[RIVAL] DB-Undo fehlgeschlagen'));
+
     renderRivalShotTable();
+    renderRivalGKStatTable();
     showToast('Letzter Rival-Shot zurückgenommen', 'update');
+    updateRivalUndoState();
 }
 
+// In der RIVAL-Verlaufstabelle Farben invertieren:
+// • Parade des gegnerischen Keepers (isGoalkeeperSave = true) = schlecht für uns → ROT
+//   → erhält den Klassen-Namen 'shot-row--goal'
+// • Unser Tor (isGoalkeeperSave = false) = gut für uns → GRÜN
+//   → erhält den Klassen-Namen 'shot-row--save'
 function renderRivalShotTable() {
-    /* --------------------------------------------------------------
-       Ziel-Container ► Tabelle für den RIVAL-Keeper
-       (s. index.html → <aside id="gk-overview-rival-table">)
-    -------------------------------------------------------------- */
     const cont = document.getElementById('gk-overview-rival-table');
-
     if (!cont) return;
 
-    /* nur Shots des aktuellen RIVAL-Keepers */
     const rows = shots
         .filter(s => s.team === 'rival' && (s.goalkeeperId ?? 1) === currentRivalGoalkeeper)
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -581,7 +867,10 @@ function renderRivalShotTable() {
     const tb = tbl.querySelector('tbody');
     rows.forEach((s, i) => {
         const tr = document.createElement('tr');
-        tr.className = s.isGoalkeeperSave ? 'shot-row--save' : 'shot-row--goal';
+
+        // ★ HIER der eigentliche Fix: Klassen vertauschen
+        tr.className = s.isGoalkeeperSave ? 'shot-row--goal' : 'shot-row--save';
+
         tr.innerHTML = `
       <td>${rows.length - i}</td>
       <td>${Math.ceil(s.gameSeconds / 60)}'</td>
@@ -589,12 +878,19 @@ function renderRivalShotTable() {
       <td>${s.isGoalkeeperSave ? '–' : 'Tor'}</td>`;
         tb.appendChild(tr);
     });
+
     if (!rows.length) {
         tb.innerHTML = `<tr><td colspan="4" style="padding:8px;">No shots yet …</td></tr>`;
     }
+    updateRivalUndoState();
 }
 
+
 // == 6. Area-Editor-Setup ==============================================
+/**
+ * Einfache Editor-View für Shot- und Goal-Areas (Listen + JSON-Form).
+ * DB-Speichern erfolgt erst über den separaten „Save Areas“-Button.
+ */
 function initAreaEditors() {
     const root = document.getElementById('areas-editor-content');
     if (!root) return;
@@ -724,151 +1020,132 @@ function makeEmptyStatRow(goalkeeperName, halfLabel = '') {
     const row = document.createElement('tr');
     for (let col = 0; col < COLS; col++) {
         const td = document.createElement('td');
-        if (col >= 2 && col !== DIVIDER_IDX) td.textContent = '';
-        if (col === ASS_IDX && !document.getElementById('ass-cell')) {
-            td.id = 'ass-cell';
-        }
-
         row.appendChild(td);
     }
-
-    /* Meta-Infos in die ersten beiden Spalten schreiben */
     row.children[0].textContent = goalkeeperName;
     row.children[1].textContent = halfLabel;
 
-    // Datensatz-Key für Direktzugriff
-    const isTw1 = goalkeeperName.startsWith('TW1');
-    const half = halfLabel === '01-30' ? 1 : 2;
+    /* Trennspalte visuell markieren (nutzt DIVIDER_IDX) */
+    if (typeof DIVIDER_IDX === 'number' && row.children[DIVIDER_IDX]) {
+        row.children[DIVIDER_IDX].classList.add('is-divider');
+        // row.children[DIVIDER_IDX].textContent = ''; // bewusst leer lassen
+    }
 
-    row.dataset.key = `${isTw1 ? 1 : 2}-${half}`;
     return row;
 }
 
+/** Kleine Verlaufstabelle (rechte Spalte) für den eigenen, aktiven Keeper. */
 function renderShotTable() {
     const cont = document.getElementById('shot-table-container');
-
     if (!cont) return;
 
-    /* 1) Alle Shots des aktiven Keepers in umgekehrter Chronologie */
     const rows = shots
-        .filter(s => s.team !== 'rival' &&
-            (s.goalkeeperId ?? 1) === currentGoalkeeper)
+        .filter(s => s.team !== 'rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper)
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-    /* 2) Leeren + Grundgerüst aufbauen */
     cont.innerHTML = '';
     const tbl = document.createElement('table');
     tbl.className = 'shot-table';
     tbl.innerHTML = `
-        <thead>
-            <tr>
-                <th>#</th>
-                <th>m</th>
-                <th>W</th>
-                <th>T</th>
-            </tr>
-        </thead>
-        <tbody></tbody>`;
+    <thead>
+      <tr><th>#</th><th>m</th><th>W</th><th>T</th></tr>
+    </thead>
+    <tbody></tbody>`;
     cont.appendChild(tbl);
 
     const tbody = tbl.querySelector('tbody');
 
-    /* 3) Jede Zeile füllen */
     rows.forEach((s, idx) => {
-        /* 1. Den Namen speziell für **diese** Zeile ermitteln */
-        const goalLabel =
-            (s.goalAreaId === DUMMY_GOAL_ID)
-                ? '7m'
-                : (goalAreaMap.get(s.goalAreaId)?.name ?? '–');
+        /* --- Robust: 7 m anhand Kategorie ODER Area-Name erkennen -----------------
+           Quick-7m besitzt keine shotAreaId; reguläre 7m (per Zonen-Klick) schon. */
+        const isSevenMShot =
+            normalize(s.shotCategory ?? (shotAreaMap.get(s.shotAreaId)?.name ?? '')) === '7m';
 
-        // Schnellzugriff auf den Namen der Wurfzone
-        const shotName = shotAreaMap.get(s.shotAreaId)?.name ?? '–';
+        /* --- „W“ (Shot A): bei 7 m immer „7 m“ anzeigen; sonst Area-Name oder „–“ --- */
+        const shotName = isSevenMShot
+            ? '7m'
+            : (shotAreaMap.get(s.shotAreaId)?.name ?? '–');
 
-        /* 2. Eine Zeile für die Tabelle erstellen */
+        /* --- „T“ (Goal A): bei 7 m keinen Sektor, sondern „7m“ zeigen ---------------
+           (aus Zuschauersicht gespiegelt bleibt „7M“, was inhaltlich gleich bleibt) */
+        const rawGoalLabel = isSevenMShot
+            ? '7m'
+            : (goalAreaMap.get(s.goalAreaId)?.name ?? '–');
+        const goalLabel = mirrorGoalSector(rawGoalLabel);
+
+        const min = Math.ceil((s.gameSeconds || 0) / 60);
+
         const tr = document.createElement('tr');
+        // Grün = Tor für uns (Gegentor des Gegners), Rot = gehalten (für Gegner gut)
         tr.className = s.isGoalkeeperSave ? 'shot-row--save' : 'shot-row--goal';
-
-        const min = Math.ceil(s.gameSeconds / 60) || 0;
-
         tr.innerHTML = `
-        <td>${rows.length - idx}</td>
-        <td>${min}'</td>
-        <td>${shotName}</td>
-        <td>${goalLabel}</td>
-    `;
-
+          <td>${rows.length - idx}</td>
+          <td>${min}'</td>
+          <td>${shotName}</td>
+          <td>${goalLabel}</td>`;
         tbody.appendChild(tr);
     });
 
-    /* 4) Fallback, falls noch keine Shots existieren */
     if (!rows.length) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="4" style="padding:8px;">No shots yet …</td>`;
-        tbody.appendChild(tr);
+        tbody.innerHTML = `<tr><td colspan="4" style="padding:8px;">No shots yet …</td></tr>`;
     }
 }
 
-function renderGkOverviewTable() {
-    /* --------------------------------------------------------------
-       Ziel-Container ► Tabelle für den EIGENEN Keeper
-       (s. index.html → <aside id="gk-overview-own-table">)
-    -------------------------------------------------------------- */
-    const cont = document.getElementById('gk-overview-own-table');
 
+/**
+ * Übersichtstabelle für eigene Würfe inkl. laufender Quote.
+ * Hinweis: Der Container '#gk-overview-own-table' ist aktuell nicht im DOM;
+ * die Funktion beendet sich dann ohne Wirkung (vorgesehen für künftige Nutzung).
+ */
+function renderGkOverviewTable() {
+    const cont = document.getElementById('gk-overview-own-table');
     if (!cont) return;
 
-    /* 1) Alle Shots des aktiven Keepers in umgekehrter Chronologie */
     const rows = shots
-        .filter(s => s.team !== 'rival' &&
-            (s.goalkeeperId ?? 1) === currentGoalkeeper)
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        .filter(s => s.team !== 'rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper)
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-    /* 2) Leeren + Grundgerüst aufbauen */
     cont.innerHTML = '';
-
     const tbl = document.createElement('table');
     tbl.className = 'shot-table';
     tbl.innerHTML = `
-        <thead>
-            <tr>
-                <th>#</th>
-                <th>m</th>
-                <th>W</th>
-                <th>%</th>
-            </tr>
-        </thead>
-        <tbody></tbody>`;
+    <thead>
+      <tr><th>#</th><th>m</th><th>W</th><th>%</th></tr>
+    </thead>
+    <tbody></tbody>`;
     cont.appendChild(tbl);
 
     const tbody = tbl.querySelector('tbody');
+    if (!rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.style.padding = '8px';
+        td.textContent = 'No shots yet …';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
 
-    /* 3) Jede Zeile füllen */
+    let saves = 0, total = 0;
     rows.forEach((s, idx) => {
-        // Schnellzugriff auf den Namen der Wurfzone
-        const shotName = shotAreaMap.get(s.shotAreaId)?.name ?? '–';
-
-        /* 2. Eine Zeile für die Tabelle erstellen */
+        total++;
+        if (s.isGoalkeeperSave) saves++;
         const tr = document.createElement('tr');
         tr.className = s.isGoalkeeperSave ? 'shot-row--save' : 'shot-row--goal';
 
-        const min = Math.ceil(s.gameSeconds / 60) || 0;
+        const c1 = document.createElement('td');
+        c1.textContent = String(idx + 1);
+        const c2 = document.createElement('td');
+        c2.textContent = `${Math.ceil((s.gameSeconds || 0) / 60)}'`;
+        const c3 = document.createElement('td');
+        c3.textContent = shotAreaMap.get(s.shotAreaId)?.name ?? '–';
+        const c4 = document.createElement('td');
+        c4.textContent = Math.round((saves / total) * 100) + '%';
 
-        tr.innerHTML = `
-        <td>${rows.length - idx}</td>
-        <td>${min}'</td>
-        <td>${shotName}</td>
-        <td>Percentage</td>
-    `;
-
+        tr.append(c1, c2, c3, c4);
         tbody.appendChild(tr);
     });
-
-    /* 4) Fallback, falls noch keine Shots existieren */
-    if (!rows.length) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="4" style="padding:8px;">No shots yet …</td>`;
-        tbody.appendChild(tr);
-    }
 }
 
 // == 7. Canvas-Interaktion ==============================================
@@ -877,9 +1154,10 @@ function renderGkOverviewTable() {
  *
  * Logik ohne Step-Indicator:
  * ‒ Wenn noch keine Wurfposition gewählt wurde ⇒ erster Klick
- * ‒ Sonst – sofern noch keine Torposition gewählt wurde ⇒ zweiter Klick
- * ‒ Alle Prüfungen laufen über das Vorhandensein der beiden
- *   State-Variablen `currentShotPosition` und `currentExactGoalPos`.
+ * ‒ sonst – sofern noch keine Torposition gewählt wurde ⇒ zweiter Klick
+ * ‒ alle Prüfungen laufen über das Vorhandensein der beiden
+ * State-Variablen `currentShotPosition` und `currentExactGoalPos`.
+ * Sonderfall „7 m“: zweiter Klick entfällt; es wird eine Dummy-Goal-Area verwendet.
  *
  * @param {MouseEvent} e – Maus-/Touch-Event
  */
@@ -890,24 +1168,27 @@ function handleCanvasClick(e) {
     if (!currentShotPosition) {
         const area = findShotAreaAtPoint(relX, relY, shotAreas);
         if (!area) return; // ausserhalb → abbrechen
-
         paintTempMarker(relX, relY); // gelben Marker malen
         currentShotPosition = area; // Wurfzone merken
         currentExactShotPos = {x: relX, y: relY};
 
         /* === Sonderfall: 7-Meter → zweiter Klick entfällt ========= */
-        if (area.name === '7m') {
-            /* Dummy-Goal-Pos anlegen (gleiche Koordinate) */
-            currentExactGoalPos = {x: relX, y: relY};
-            currentStep = 2; // Schritt überspringen
-            updateButtonStates();// Tor / Gehalten sofort aktiv
-            drawAreas(); // Marker neu zeichnen
-            return; // fertig – auf Button-Click warten
+        // 7 m robuster erkennen (Leerzeichen/Case/Akzent-frei)
+        // robustere 7m-Erkennung über den gemeinsamen Normaliser
+        const isSevenM = normalize(area.name ?? '') === '7m';
+
+        if (isSevenM) {
+            // === 7 m: Zweiter Klick soll auf den Mini-Toren den Sektor bestimmen.
+            // Daher hier KEINE goal-Position vorab setzen – wir warten gezielt
+            // auf den zweiten Klick auf die 7m-Mini-Gates.
+            currentStep = 2;
+            updateButtonStates();
+            drawAreas();
+            return;
         }
 
         currentStep = 2; // Cursor wechselt zu Schritt 2
         updateButtonStates(); // Cancel sofort aktiv
-
         return; // fertig – auf zweiten Klick warten
     }
 
@@ -915,13 +1196,12 @@ function handleCanvasClick(e) {
        2) Zweiter Klick ⇒ Torzone (Goal Area) festlegen
     ----------------------------------------------------------------*/
     if (!currentExactGoalPos) {
-        const area = findAreaAtPoint(relX, relY, goalAreas);
+        const area = getClickedGoalArea(relX, relY);
         if (!area) return; // ausserhalb → abbrechen
 
         paintTempMarker(relX, relY); // roten Marker malen
-
         currentExactGoalPos = {x: relX, y: relY};
-
+        currentGoalArea = area; // Auswahl *persistieren*, nicht neu berechnen
         updateButtonStates(); // Tor / Gehalten Buttons aktiv
         drawAreas(); // Canvas komplett neu zeichnen
     }
@@ -929,40 +1209,40 @@ function handleCanvasClick(e) {
 
 // == 8. Workflow-Steuerung =============================================
 /**
- * Aktualisiert die drei Overlay-Buttons (Tor · Gehalten · Cancel).
- *  • Tor / Gehalten werden erst aktiv, wenn sowohl Shot- als auch Goal-Pos gesetzt sind.
- *  • Cancel wird **nur** aktiv, sobald der Nutzer
- *  mit Schritt 1 begonnen hat (es also etwas gibt, das man überhaupt abbrechen kann).
+ * Aktualisiert die Overlay-Buttons:
+ * – Tor/Gehalten aktiv, wenn Shot- und Goal-Position gesetzt sind (Step 2).
+ * – Abbrechen aktiv, sobald eine "Shot-Position" gewählt wurde (Step begonnen).
+ * – Undo nur, wenn es eigene Shots für den aktuell gewählten Keeper gibt
+ * und kein laufender Erfassungsschritt aktiv ist.
  */
 function updateButtonStates() {
-    const stepReady = currentStep === 2 && !!currentExactGoalPos; // beide Klicks erledigt
 
-    /* === 1) Tor / Gehalten ====================================== */
-    document
-        .getElementById('goal-btn')
-        .classList.toggle('active', stepReady);
+    const stepReady = currentStep === 2 && !!currentExactGoalPos;
 
-    document
-        .getElementById('goalkeeper-save-btn')
-        .classList.toggle('active', stepReady);
+    const goalBtn = document.getElementById('goal-btn');
+    if (goalBtn) goalBtn.classList.toggle('active', stepReady);
 
-    /* === 2) Cancel – erlaubt, sobald *mindestens* erster Klick erfolgt ist */
-    const cancelPossible = !!currentShotPosition; // schon ein Shot-Bereich gewählt?
-    document
-        .getElementById('cancel-btn')
-        .classList.toggle('active', cancelPossible);
+    const saveBtn = document.getElementById('goalkeeper-save-btn');
+    if (saveBtn) saveBtn.classList.toggle('active', stepReady);
 
-    /* === 3) Undo – nur aktiv, wenn
-        • mindestens 1 fertig erfasster Shot existiert UND
-        • aktuell *kein* Shot-Vorgang läuft (= kein erster Klick) */
-    const undoReady = shots
-            .length > 0 // es gibt überhaupt noch Shots
-        && !currentShotPosition // kein Vorgang läuft
-        && currentStep === 1; // Registrier-Workflow ruht
-    // damit bleibt Undo aktiv, solange mindestens noch ein Shot existiert.
+    const cancelPossible = !!currentShotPosition;
+    const cancelBtn = document.getElementById('cancel-btn');
+    if (cancelBtn) cancelBtn.classList.toggle('active', cancelPossible);
+
+    // Undo nur, wenn es für den *aktuellen* Keeper eigene Shots gibt
+    const hasOwnShotsForGK = shots.some(
+        s => s.team !== 'rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper
+    );
+    const undoReady = hasOwnShotsForGK && !currentShotPosition && currentStep === 1;
+
     const undoBtn = document.getElementById('undo-btn');
-    undoBtn.classList.toggle('active', undoReady);
-    undoBtn.disabled = !undoReady;
+    if (undoBtn) {
+        undoBtn.classList.toggle('active', undoReady);
+        undoBtn.disabled = !undoReady;
+    }
+    // ▼ 7m-Overlay-Button sperren, sobald ein Erfassungsschritt aktiv ist
+    const btn7 = document.getElementById(SEVENM_BTN_ID);
+    if (btn7) btn7.disabled = !!currentShotPosition;
 }
 
 function resetRegistrationProcess() {
@@ -970,41 +1250,43 @@ function resetRegistrationProcess() {
     currentShotPosition = null;
     currentExactShotPos = null;
     currentExactGoalPos = null;
+    currentGoalArea = null;
     updateButtonStates();
     drawAreas();
 }
 
 /**
- * Schließt einen Wurf ab und persistiert ihn (inkl. GK-Zuweisung und
- * Spielzeit in Sekunden). Ergänzt das shot-Objekt um gameSeconds, damit
- * wir später die aufgerundete Minute zeichnen können.
- *
- * @param {boolean} gkSave – true = Torwart-Parade, false = Tor
+ * Persistiert den komplett erfassten Wurf (inkl. exakter Koordinaten),
+ * aktualisiert Statistiken/Tabellen und setzt den Workflow zurück.
+ * Behandelt „7 m“ als Dummy-Goal-Area, falls keine echte Torzone getroffen wurde.
+ * @param {boolean} gkSave true = Parade, false = Tor
  */
 async function finishShot(gkSave = false) {
-    /* --- Plausibilitätsprüfungen ------------------------------------- */
-    if (!currentShotPosition || !currentExactShotPos || !currentExactGoalPos) {
+    const isSevenM =
+        !!currentShotPosition && normalize(currentShotPosition.name ?? '') === '7m';
+    if (!currentShotPosition || !currentExactShotPos) {
         showToast('Ungültiger Wurf – bitte alle Schritte abschließen', 'offline');
         return;
     }
 
-    /* --- Torzone (Goal-Area) ermitteln ----------------------------- */
-    let goalArea = findAreaAtPoint(
-        currentExactGoalPos?.x ?? 0,
-        currentExactGoalPos?.y ?? 0,
-        goalAreas
-    );
-
-    /* 7-Meter = kein Klick aufs Großtor → Dummy-Area anlegen */
-    if (!goalArea && currentShotPosition.name === '7m') {
-        goalArea = {id: DUMMY_GOAL_ID, name: '7m', color: '#8E070C'}; // rein für das vollständige Objekt
+    if (isSevenM && !currentExactGoalPos) {
+        showToast('Bei 7m bitte einen Tor-Sektor wählen', 'offline');
+        return;
     }
 
-    if (!goalArea) return; // für alle anderen Fälle weiter abbrechen
+    // Primär die *bereits gewählte* Tor-Zone verwenden (stabil gegen Resize/Zoom).
+    let goalArea = currentGoalArea;
+    // Fallback (Legacy/Robustheit): nur wenn kein Cache (z.B. bei Alt-Datensätzen)
 
-    /* --------------------------------------------------------------
-   Shot-Objekt OHNE id  →  Schlüssel vergibt IndexedDB
-    ----------------------------------------------------------------*/
+    if (!goalArea) {
+        const goalRef = currentExactGoalPos ?? currentExactShotPos;
+        goalArea = getClickedGoalArea(goalRef.x, goalRef.y);
+    }
+
+    if (!goalArea) return;
+
+    const halfAtShot = computeHalfAtNow();
+
     const shot = {
         timestamp: new Date().toISOString(),
         gameTime: formatTime(gameSeconds),
@@ -1016,105 +1298,133 @@ async function finishShot(gkSave = false) {
         exactShotPos: currentExactShotPos,
         exactGoalPos: currentExactGoalPos,
         isGoalkeeperSave: gkSave,
-        goalkeeperId: currentGoalkeeper
+        goalkeeperId: currentGoalkeeper,
+        half: halfAtShot // stabile HZ im Datensatz hinterlegen
     };
 
-    /* --- In-Memory Array + UI-Updates ------------------------------ */
-    /* --- Persistenz + ID ------------------------------------------------ */
-    if (navigator.onLine) {
-        // Online ⇒ sofort persistieren ⇒ id zurückschreiben
+    try {
         shot.id = await addShot(shot);
+    } catch (e) {
+        console.warn('[SHOT] IDB write failed', e);
     }
+
     shots.push(shot);
     updateStatistics();
     renderShotTable();
+    renderGkOverviewTable();
     renderGKStatTable();
     resetRegistrationProcess();
 }
 
 // == 9. Zeichnen & Statistik ===========================================
-/**
- * Zeichnet ein halbtransparentes Rechteck.
- */
-function drawRectArea(ctx, area, w, h) {
+/** Zeichnet eine rechteckige Zone (Füllung/Kontur separat alpha-gesteuert) inkl. Label. */
+function drawRectArea(ctx, area, w, h, fillAlpha = ALPHA_SHOT_RECT, strokeAlpha = ALPHA_STROKE_SHOT_RECT) {
     const {x1, y1, x2, y2} = area.coords;
+    const px = x1 * w, py = y1 * h, pw = (x2 - x1) * w, ph = (y2 - y1) * h;
+
     ctx.save();
-    ctx.fillStyle = area.color + '22';
+
+    // --- Füllung halbtransparent ------------------------------------
+    ctx.globalAlpha = fillAlpha; // ← Füll-Transparenz
+    ctx.fillStyle = area.color;
+    ctx.fillRect(px, py, pw, ph);
+
+    // --- Kontur separat steuern -------------------------------------
+    ctx.globalAlpha = strokeAlpha; // ← Kontur-Transparenz
     ctx.strokeStyle = area.color;
     ctx.lineWidth = 2;
-    ctx.fillRect(x1 * w, y1 * h, (x2 - x1) * w, (y2 - y1) * h);
-    ctx.strokeRect(x1 * w, y1 * h, (x2 - x1) * w, (y2 - y1) * h);
-    /* Label mittig */
+    ctx.strokeRect(px, py, pw, ph);
+
+    // --- Label/Text deckend -----------------------------------------
+    ctx.globalAlpha = 1;
     ctx.fillStyle = '#000';
     ctx.font = '12px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(area.name,
-        (x1 + x2) / 2 * w,
-        (y1 + y2) / 2 * h);
+    ctx.fillText(area.name, (x1 + x2) / 2 * w, (y1 + y2) / 2 * h);
+
     ctx.restore();
 }
 
-/* ==============================================================
- * Kleine Hilfsfunktion: zeichnet einen temp. Marker,
- * wenn eine Position übergeben wurde.
- * ============================================================== */
+/** Zeichnet – falls vorhanden – einen temporären Marker (Work-in-Progress). */
 function drawTempMarkerIfAvailable(pos) {
     if (!pos) return;
     const p = relToCanvas(pos.x, pos.y, canvas);
     drawMarker(ctx, p.x, p.y, 6, COLOR_TEMP_MARKER);
 }
 
+/**
+ * Komplettes Redraw auf Basis der aktuellen Canvas-Größe:
+ * 1) Wurfzonen (Legacy-Polygon vs. Rechteck)
+ * 2) Torzonen
+ * 3) Optionale Verbindungslinien (nur eigene Shots des aktiven Keepers)
+ * 4) Permanente Marker + Minutenlabels
+ * 5) Temporäre Marker (laufender Erfassungsschritt)
+ */
 function drawAreas() {
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    if (!canvas || !ctx) return;
 
-    /* 1) Shot-Areas – Legacy vs. Rechteck */
+    // Immer die *aktuellen* Canvas-Maße nutzen, um Pixel vs. Relativwerte konsistent zu halten
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1) Shot-Areas: Legacy-Polygon (id ≤ 9) vs. Rechteck (id ≥ 10)
+    // Transparenzen für Füllung/Kontur getrennt steuerbar (visuell ruhiger)
     shotAreas.forEach(area => {
         if (area.id <= 9) {
-            drawShotAreaLegacy(ctx, area, canvasWidth, canvasHeight, 0.35);
+            drawShotAreaLegacy(
+                ctx, area, canvasWidth, canvasHeight,
+                ALPHA_SHOT_LEGACY, ALPHA_STROKE_SHOT_LEGACY
+            );
         } else {
-            drawRectArea(ctx, area, canvasWidth, canvasHeight);
+            drawRectArea(
+                ctx, area, canvasWidth, canvasHeight,
+                ALPHA_SHOT_RECT, ALPHA_STROKE_SHOT_RECT
+            );
         }
     });
 
-    /* 2) Goal-Areas – Rechtecke + Label */
+    // 2) Goal-Areas (immer Rechtecke) – ebenfalls Fill+Stroke getrennt
     goalAreas.forEach(area => {
         const x1 = area.coords.x1 * canvasWidth;
         const y1 = area.coords.y1 * canvasHeight;
         const x2 = area.coords.x2 * canvasWidth;
         const y2 = area.coords.y2 * canvasHeight;
+        const w = x2 - x1, h = y2 - y1;
 
         ctx.save();
-        ctx.fillStyle = area.color + '22';
-        ctx.strokeStyle = area.color;
+        ctx.globalAlpha = ALPHA_GOAL_AREAS;
+        ctx.fillStyle = area.color;
+        ctx.fillRect(x1, y1, w, h);
 
-        ctx.lineWidth = 3;
-        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.globalAlpha = ALPHA_STROKE_GOAL_AREAS;
+        ctx.strokeStyle = area.color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, w, h);
         ctx.restore();
     });
 
-    /* ---------- Früh-Exit, wenn es noch GAR KEINE Shots gibt ------ */
+    // Früh-Exit: Keine Shots → nur temporäre Marker (Work-in-Progress) zeigen
     if (!shots.length) {
         drawTempMarkerIfAvailable(currentExactShotPos);
         drawTempMarkerIfAvailable(currentExactGoalPos);
-        return; // keine weiteren Berechnungen nötig
+        return;
     }
 
-    /* 3) Verbindungslinien (falls aktiviert) – nur für akt. GK */
+    // 3) Nur Shots des aktiven Keepers visualisieren (klare Trennung eig./rival)
     const visibleShots = shots
-        .filter(s => s.team !== 'rival' &&
-            (s.goalkeeperId ?? 1) === currentGoalkeeper)
+        .filter(s => s.team !== 'rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper);
 
+    // Verbindungslinien optional (Replays/Analyse)
     if (showShotLines) {
         ctx.save();
-
         ctx.strokeStyle = COLOR_LINES;
-        ctx.lineWidth = WIDTH_LINES;         // dicker  WIDTH_LINES
-        ctx.shadowBlur = BLUR_LINES;        // dezente Schattenkante BLUR_LINES
-        ctx.shadowColor = SHADOW_COLOR; // SHADOW_COLOR
+        ctx.lineWidth = WIDTH_LINES;
+        ctx.shadowBlur = BLUR_LINES;
+        ctx.shadowColor = SHADOW_COLOR;
 
         visibleShots.forEach(s => {
+            // Shots ohne exakte Koordinaten auslassen (ältere Datensätze)
+            if (!s.exactShotPos || !s.exactGoalPos) return;
             const start = relToCanvas(s.exactShotPos.x, s.exactShotPos.y, canvas);
             const end = relToCanvas(s.exactGoalPos.x, s.exactGoalPos.y, canvas);
             ctx.beginPath();
@@ -1125,8 +1435,9 @@ function drawAreas() {
         ctx.restore();
     }
 
-    /* 4) Permanente Marker + Minuten-Label */
+    // 4) Permanente Marker + Minuten-Label
     visibleShots.forEach(s => {
+        if (!s.exactShotPos || !s.exactGoalPos) return;
         const shotPt = relToCanvas(s.exactShotPos.x, s.exactShotPos.y, canvas);
         const goalPt = relToCanvas(s.exactGoalPos.x, s.exactGoalPos.y, canvas);
         const col = s.isGoalkeeperSave ? COLOR_GOAL_SAVE : COLOR_GOAL_TOR;
@@ -1134,27 +1445,19 @@ function drawAreas() {
         drawMarker(ctx, shotPt.x, shotPt.y, 12, col);
         drawMarker(ctx, goalPt.x, goalPt.y, 8, col);
 
-        drawText(
-            ctx,
-            String(Math.ceil(s.gameSeconds / 60) || 0),
-            shotPt.x,
-            shotPt.y,
-            '12px Arial',
-            '#000'
-        );
+        // Minutenrundung: "ceil" statt "floor", damit 0:01 → 1'
+        drawText(ctx, String(Math.ceil(s.gameSeconds / 60) || 0), shotPt.x, shotPt.y, '12px Arial', '#000');
     });
 
-    /* 5) Aktuelle, noch ungespeicherte Auswahl */
+    // 5) Aktuelle, noch ungespeicherte Auswahl (gelbe Temp-Marker)
     drawTempMarkerIfAvailable(currentExactShotPos);
     drawTempMarkerIfAvailable(currentExactGoalPos);
 }
 
-/** Statistik-Update – Reihenfolge fixiert (shotContainer zuerst!) */
 /**
- * Erzeugt/aktualisiert Statistik-Boxen (Shot Positions, Goal Areas).
- * ▸ Es werden **nur** die Würfe des aktuell gewählten Torwarts
- *   berücksichtigt (Filter über goalkeeperId).
- * ▸ Alte Datensätze ohne goalkeeperId → werden als GK 1 interpretiert.
+ * Baut die beiden Stat-Box-Container (Shot-Positionen, Goal-Areas) neu auf.
+ * Es zählen ausschließlich eigene Würfe des aktuell gewählten Keepers.
+ * Fehlen die Container im DOM, wird frühzeitig beendet (defensiv).
  */
 function updateStatistics() {
     /* ---- 1) Relevante Würfe für aktuellen Torwart vorfiltern ------ */
@@ -1166,6 +1469,9 @@ function updateStatistics() {
     /* ---- 2) UI-Container für Shot- und Goal-Stats holen ----------- */
     const shotContainer = document.getElementById('shot-positions-stats');
     const goalContainer = document.getElementById('goal-areas-stats');
+
+    // Falls Container nicht vorhanden – fehlerfreien return
+    if (!shotContainer || !goalContainer) return;
 
     /* ---- 3) Leerer Zustand (kein einziger relevanter Schuss) ------- */
     if (!relevantShots.length) {
@@ -1197,20 +1503,30 @@ function updateStatistics() {
     function makeStatBox(label, count, pct) {
         const div = document.createElement('div');
         div.className = 'stat-box';
-        div.innerHTML = `
-            <div class="stat-position">${label}</div>
-            <div class="stat-count">${count}</div>
-            <div class="stat-percent">${pct}%</div>
-        `;
+
+        const a = document.createElement('div');
+        a.className = 'stat-position';
+        a.textContent = label;
+        const b = document.createElement('div');
+        b.className = 'stat-count';
+        b.textContent = String(count);
+        const c = document.createElement('div');
+        c.className = 'stat-percent';
+        c.textContent = `${pct}%`;
+
+        div.append(a, b, c);
         return div;
     }
 }
 
 // == 10. Timer-Logik =====================================================
+/** Stellt gespeicherten Timer-Zustand wieder her und startet ggf. die Uhr. */
 async function initTimers() {
-    const state = await getGameTimerState();
-    gameSeconds = state.seconds;
-    gameRunning = state.isRunning;
+    const raw = await getGameTimerState();
+    const state = raw ?? {seconds: 0, isRunning: false};
+
+    gameSeconds = Number.isFinite(state.seconds) ? Number(state.seconds) : 0;
+    gameRunning = !!state.isRunning;
 
     document.getElementById('game-time').textContent = formatTime(gameSeconds);
     document.getElementById('reset-btn').disabled = gameRunning;
@@ -1222,13 +1538,26 @@ async function initTimers() {
     }
 }
 
+/** Start/Pause Umschalten, UI aktualisieren, Zustand persistent halten. */
 function toggleGameTimer() {
     const btn = document.getElementById('start-pause-btn');
 
     if (gameRunning) {
+        // --- Pause drücken ------------------------------------------------------
         clearInterval(gameInterval);
         btn.textContent = 'Resume';
     } else {
+        // --- Start drücken ------------------------------------------------------
+        // Wenn wir ab 30:00 neu starten und die 2. HZ noch nicht „aktiv“ ist,
+        // wird sie hier scharf geschaltet (exakt nach Nutzer-Start).
+        if (gameSeconds >= HALF_LENGTH && !secondHalfStarted) {
+            secondHalfStarted = true;
+            saveSecondHalfStarted();
+
+            // UI nachziehen, da currentHalf() nun auf 2. HZ springen kann
+            refreshHalfDependentUI();
+        }
+
         gameInterval = setInterval(updateGameTime, 1000);
         btn.textContent = 'Pause';
     }
@@ -1236,14 +1565,13 @@ function toggleGameTimer() {
     gameRunning = !gameRunning;
     document.getElementById('reset-btn').disabled = gameRunning;
 
-    // Zustand speichern
-    setGameTimerState(gameSeconds, gameRunning).then(r => {
-    });
+    setGameTimerState(gameSeconds, gameRunning)
+        .catch(err => console.error('[Timer] setGameTimerState fehlgeschlagen:', err));
 }
 
 /**
- * Passt die Spielzeit um «diff» Sekunden an (clamped 0 … FULL_LENGTH)
- * und speichert den Zustand in IndexedDB.
+ * Verschiebt die Spielzeit um `diff` Sekunden (geclamped 0…60 min) und speichert.
+ * Halbzeitwechsel triggert ein UI-Refresh (Badges/Tabellen).
  */
 function adjustGameSeconds(diff) {
     const prevHalf = currentHalf(); // vorherige HZ merken
@@ -1259,6 +1587,10 @@ function adjustGameSeconds(diff) {
         .catch(console.error);
 }
 
+/**
+ * Tick-Handler im Laufbetrieb: Zeit hochzählen, Auto-Stops bei 30:00/60:00,
+ * Halbzeit-/Ende-Aktionen (Auto-Fill), Zustand persistieren.
+ */
 async function updateGameTime() {
     /* 1) Zeit hochzählen & Anzeige aktualisieren */
     gameSeconds++;
@@ -1288,6 +1620,7 @@ async function updateGameTime() {
     }
 }
 
+/** Stoppt und nullt die Uhr (UI + Persistenz). */
 function resetGameTimer() {
     clearInterval(gameInterval);
     gameSeconds = 0;
@@ -1295,6 +1628,11 @@ function resetGameTimer() {
     document.getElementById('start-pause-btn').textContent = 'Start';
     document.getElementById('game-time').textContent = formatTime(0);
     document.getElementById('reset-btn').disabled = false;
+
+    // --- 2. HZ-Flag zurücksetzen --------------------------------------------
+    secondHalfStarted = false;
+    saveSecondHalfStarted();
+    refreshHalfDependentUI(); // Badges/Tabellen auf 1. HZ bringen
 
     // Zustand zurücksetzen
     setGameTimerState(0, false).catch(err =>
@@ -1307,41 +1645,51 @@ const formatTime = sec =>
     `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
 // == 11. Online/Offline & DB Sync =======================================
+
+/**
+ * Online/Offline-Behandlung:
+ * – Online: nicht synchronisierte Offline-Shots nachtragen, anschließend neu lesen.
+ * – Render-Reihenfolge: erst eigene Sichten, dann Rival, zuletzt Canvas.
+ * – Offline: klarer Toast, State bleibt valide.
+ */
 async function handleConnectionChange() {
     if (navigator.onLine) {
+        // Falls ein Offline-Hinweis offen war → entfernen
         document.querySelector('.toast--offline')?.remove();
 
-        // --- 1) Alle **noch nicht** persistierten Shots (id == undefined)
-        const unsynced = shots
-            .filter(s => s.id == null);
+        // Nur Datensätze ohne ID sind "unsynced" (offline erfasst)
+        const unsynced = shots.filter(s => s.id == null);
 
         if (unsynced.length) {
-            /* 2) Bulk-Insert – bulkAddShots ergänzt **in-place** die id   */
-            await bulkAddShots(unsynced);
+            try {
+                await bulkAddShots(unsynced);
+                shots = await getShots();
+                updateStatistics();
+                renderGkOverviewTable();
+                renderGKStatTable();
+                renderRivalShotTable();
+                renderRivalGKStatTable();
+                drawAreas();
+                showToast('Offline-Daten synchronisiert ✓', 'update');
+                updateButtonStates();
+                enableRivalActionBtns(false);
+                updateRivalUndoState();
 
-            /* 3) UI refreshen (IDs sind gesetzt) */
-            updateStatistics();
-            renderShotTable();
-            renderGKStatTable();
-            drawAreas();
-            showToast('Offline-Daten synchronisiert ✓', 'update');
-            updateButtonStates();
-            renderRivalShotTable();
-            enableRivalActionBtns(false);
+            } catch (e) {
+                console.warn('[SYNC] Bulk-Insert fehlgeschlagen', e);
+                showToast('Sync fehlgeschlagen – erneut versuchen', 'offline');
+            }
         }
     } else {
         showToast('Keine Internet-Verbindung', 'offline');
     }
-
 }
 
-/* -----------------------------------------------------------
- * Halbzeit-Auto-Fill
- *  – Zählt alle Gegentore (Tor = roter Marker, also isGoalkeeperSave == false)
- *  bis 30:00 min und trägt sie – falls das Feld noch leer ist –
- *  in das Halbzeit-Input ein. Gleichzeitig wird der Wert in
- *  IndexedDB (key 'halftime') gespeichert.
- * ---------------------------------------------------------- */
+/**
+ * Trägt zur Halbzeit automatisch die Summe aller Gegentore bis 30:00 ein,
+ * sofern das Eingabefeld noch leer ist. Berücksichtigt reguläre Gegentore
+ * (shots !isGoalkeeperSave) + manuelle 7g6-Tore (beide Keeper, 1. HZ).
+ */
 async function autoFillHalftimeScore() {
     /* 1) DOM-Referenz suchen (Input mit Placeholder „Halbzeit“) */
     const htInput = document.getElementById('halftime-input');
@@ -1349,13 +1697,13 @@ async function autoFillHalftimeScore() {
     if (htInput.value.trim() !== '') return; // Nutzer hat schon etwas eingetragen
 
     /* 2) Gegentore bis 30:00 addieren
-     *    • reguläre Gegentore aus shots            (!isGoalkeeperSave)
-     *    • 7g6-Tore aus manuellem Zähler (sevenG6)  Spalte „7g6“
+     * • reguläre Gegentore aus shots (!isGoalkeeperSave)
+     * • 7g6-Tore aus manuellem Zähler (sevenG6) Spalte „7g6“
      */
     const concededShots = shots
         .filter(s => s.team !== 'rival' &&
             !s.isGoalkeeperSave &&
-            s.gameSeconds < HALF_LENGTH
+            s.gameSeconds <= HALF_LENGTH
         ).length;
 
     /* 7g6-Tore: Summe beider Keeper für die 1. HZ */
@@ -1374,13 +1722,10 @@ async function autoFillHalftimeScore() {
     }
 }
 
-/* -----------------------------------------------------------
- * Full-Time-Auto-Fill
- *  – Zählt alle Gegentore (Tor = roter Marker, also isGoalkeeperSave == false)
- *  bis 60:00 min und trägt sie – falls das Feld noch leer ist –
- *  in das FT ein. Gleichzeitig wird der Wert in
- *  IndexedDB (key 'fulltime') gespeichert.
- * ---------------------------------------------------------- */
+/**
+ * Trägt zum Spielende automatisch die Summe aller Gegentore bis 60:00 ein,
+ * sofern das Feld noch leer ist. Einschließlich aller 7g6-Tore (beide Keeper, HZ 1 + 2).
+ */
 async function autoFillFulltimeScore() {
     const ftInput = document.getElementById('fulltime-input');
     if (!ftInput || ftInput.value.trim() !== '') return;
@@ -1405,11 +1750,8 @@ async function autoFillFulltimeScore() {
 }
 
 /**
- * Liefert die erste Shot-Area, in die der relative Punkt (relX, relY) fällt,
- * oder undefined, falls keine passt.
- *
- * • id 1-9 Legacy-Geometrie via isPointInShotAreaLegacy (Polygon/Radien)
- * • id ≥ 10 einfache Rechteckprüfung auf Basis der Bounding-Box
+ * Liefert die erste passende Shot-Area zum relativen Punkt (relX, relY).
+ * Legacy-IDs (≤9) werden über Polygon/Radius geprüft, sonst Rechteck-Hit.
  */
 const findShotAreaAtPoint = (relX, relY, areas) =>
     areas.find(area => {
@@ -1426,89 +1768,538 @@ const findShotAreaAtPoint = (relX, relY, areas) =>
             relY >= c.y1 && relY <= c.y2;
     });
 
+/**
+ * Liefert die erste passende Area (Polygon oder Rechteck) für den relativen Punkt.
+ * Erweiterung:
+ *  – Polygon-Hit-Test sammelt jetzt ALLE vorhandenen (xN/yN)-Paare und ignoriert Lücken.
+ *  – Fallback: Wenn weniger als 3 Punkte vorhanden sind (z. B. genau 2), wird eine
+ *    achsenparallele Bounding-Box aus den vorhandenen Punkten gebildet und darauf getestet.
+ */
 function findAreaAtPoint(relX, relY, areasArr) {
+    const px = relX * canvasWidth;
+    const py = relY * canvasHeight;
+    const FUZZ = 1; // 1px Toleranz gegen Rundungsfehler
+
     return areasArr.find(a => {
-        const coords = a.coords;
-        if (coords.x3 !== undefined) {
-            const pts = Object.entries(coords)
-                .map(([k, v]) => ({
-                    x: (k.startsWith('x') ? v : null) * canvasWidth,
-                    y: (k.startsWith('y') ? v : null) * canvasHeight
-                }))
-                .filter(p => p.x != null && p.y != null);
-            return isPointInPolygon(pts, {
-                x: relX * canvasWidth,
-                y: relY * canvasHeight
-            });
-        } else {
-            return relX >= coords.x1 && relX <= coords.x2
-                && relY >= coords.y1 && relY <= coords.y2;
+        const coords = a.coords || {};
+
+        // ---- Polygon-Zweig, sobald irgendein dritter Index existiert (legacy: x3/y3 kann vorhanden sein) ----
+        if (coords.x3 !== undefined || coords.y3 !== undefined) {
+            // 1) Alle tatsächlich vorhandenen Punkte einsammeln (Lücken überspringen)
+            const pts = [];
+            for (let i = 1; i <= 16; i++) { // großzügiges Limit
+                const xi = coords[`x${i}`];
+                const yi = coords[`y${i}`];
+                if (xi != null && yi != null) {
+                    pts.push({x: xi * canvasWidth, y: yi * canvasHeight});
+                }
+            }
+
+            // 2) Regulärer Polygon-Test ab 3 Punkten
+            if (pts.length >= 3) {
+                return isPointInPolygon(pts, {x: px, y: py});
+            }
+
+            // 3) Fallback: bei genau 2+ Punkten auf Bounding-Box testen
+            if (pts.length >= 2) {
+                const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+                const x1 = Math.min(...xs) - FUZZ, x2 = Math.max(...xs) + FUZZ;
+                const y1 = Math.min(...ys) - FUZZ, y2 = Math.max(...ys) + FUZZ;
+                return px >= x1 && px <= x2 && py >= y1 && py <= y2;
+            }
+
+            // zu wenig Punkte → kein Treffer
+            return false;
+        }
+
+        // ---- Rechteck-Zweig (x1/y1/x2/y2) ----
+        if (coords.x1 == null || coords.y1 == null || coords.x2 == null || coords.y2 == null) {
+            return false;
+        }
+
+        const x1 = coords.x1 * canvasWidth - FUZZ;
+        const y1 = coords.y1 * canvasHeight - FUZZ;
+        const x2 = coords.x2 * canvasWidth + FUZZ;
+        const y2 = coords.y2 * canvasHeight + FUZZ;
+
+        return px >= x1 && px <= x2 && py >= y1 && py <= y2;
+    });
+}
+
+/* ======================================================================
+ * Mini-Gate Mapping (7m): Klicks auf die kleinen Mini-Tore (rechts oben)
+ * werden auf die bestehenden 3×3 Goal-Areas (OL…UR) gemappt.
+ * ─ Minimal-invasiv: kein Duplizieren von Areas, nur Rechenlogik.
+ * ====================================================================*/
+
+/* ★★ WICHTIG: Diese Werte einmalig auf eure Canvas-Grafik anpassen ★★
+   Sie definieren das Bounding-Rect der kleinen Mini-Tore relativ (0..1).
+   Als Startwert grob aus dem Screenshot geschätzt – bitte feinjustieren. */
+const MINI_GOAL_BBOX = {
+    x1: 0.715,  // links
+    y1: 0.020,  // oben
+    x2: 0.965,  // rechts
+    y2: 0.195   // unten
+};
+
+/* ======================================================================
+ * Quick-Button „7m“ (Overlay) – schnelles Loggen GEHALTEN/TOR
+ * über eine kompakte Schaltfläche direkt am Mini-Tor.
+ * ====================================================================*/
+
+const SEVENM_BTN_ID = 'sevenm-quick-btn';
+
+/** Erzeugt die 7m-Quick-Schaltfläche einmalig (Markup wie Rival-Buttons). */
+function ensureSevenMQuickBtn() {
+    // Basis: Button im selben Container wie das Canvas platzieren
+    const host = canvas?.parentElement;
+    if (!host) return;
+
+    if (document.getElementById(SEVENM_BTN_ID)) return; // bereits vorhanden
+
+    const btn = document.createElement('button');
+    btn.id = SEVENM_BTN_ID;
+    btn.type = 'button';
+    btn.className = 'gk-overview-action-btn sevenm-overlay-btn';
+    btn.dataset.pos = '7m';
+    btn.dataset.upgraded = '1';
+    btn.setAttribute('aria-label', '7m schnell erfassen');
+
+    btn.innerHTML = `
+    <span class="rival-mini rival-mini--neg" data-quick="save" aria-label="Gehalten">P</span>
+    <span class="rival-label">7m</span>
+    <span class="rival-mini rival-mini--pos" data-quick="goal" aria-label="Tor">T</span>
+  `;
+
+    /* --- NUR die Textfarbe der Mini-Labels auf diesem Button anpassen ----
+       wir überschreiben gezielt die Schriftfarbe:
+                P (Gehalten) = Grün, T (Tor) = Rot. Der Hintergrund bleibt unverändert. */
+    const miniSave = btn.querySelector('.rival-mini[data-quick="save"]');
+    const miniGoal = btn.querySelector('.rival-mini[data-quick="goal"]');
+    if (miniSave) miniSave.style.color = '#00b050'; // Grün wie Marker für Saves
+    if (miniGoal) miniGoal.style.color = '#ff0000'; // Rot wie Marker für Tore
+
+    // Nur Klicks auf die Mini-Icons (−/+) verarbeiten – Rest ignorieren
+    btn.addEventListener('click', (e) => {
+        const quickEl = e.target.closest('.rival-mini[data-quick]');
+        if (!quickEl) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const isSave = quickEl.dataset.quick === 'save';
+        void quickSevenM(isSave);
+    });
+
+    // Wichtig: absolute Positionierung über dem Canvas
+    btn.style.position = 'absolute';
+    btn.style.zIndex = '2147483647';
+
+    host.appendChild(btn);
+    placeSevenMQuickBtn();
+}
+
+/** Repositioniert die 7m-Quick-Schaltfläche relativ zur MINI_GOAL_BBOX. */
+function placeSevenMQuickBtn() {
+    const btn = document.getElementById(SEVENM_BTN_ID);
+    if (!btn || !canvas) return;
+
+    // Anchor: rechte obere Ecke der Mini-Gate-Box
+    const cw = canvasWidth;
+    const ch = canvasHeight;
+
+    // Pixelkoordinaten im Canvas-Koordinatensystem
+    const anchorX = MINI_GOAL_BBOX.x2 * cw;
+    const anchorY = MINI_GOAL_BBOX.y1 * ch;
+
+    // Host-Offset (Button ist absolut zum Canvas-Elterncontainer)
+    const host = canvas.parentElement;
+    const hostRect = host.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+
+    // Position des Canvas innerhalb des Hosts
+    const offsetLeft = canvasRect.left - hostRect.left;
+    const offsetTop = canvasRect.top - hostRect.top;
+
+    // Kleiner Innenabstand, damit der Button die Mini-Gates nicht verdeckt
+    const M = 6;
+
+    // Größe erst nach Einfügen messbar
+    const bw = btn.offsetWidth || 88;
+
+    // Oben rechts an die Box „andocken“
+    const leftPx = Math.round(offsetLeft + anchorX - bw - M);
+    const topPx = Math.round(offsetTop + anchorY + M);
+
+    btn.style.left = `${leftPx}px`;
+    btn.style.top = `${topPx}px`;
+
+    // Aktivier-/Deaktivier-Logik an den laufenden Workflow koppeln:
+    // Während einer begonnenen Aufnahme (Step 2) sperren, um Verwechslungen zu vermeiden
+    btn.disabled = !!currentShotPosition;
+}
+
+/** Schnelles Erzeugen eines 7m-Shots (ohne Koordinaten/Goal-Sektor). */
+async function quickSevenM(isSave) {
+    // Halbzeit stabil über die zentrale Logik bestimmen
+    const halfAtShot = computeHalfAtNow();
+
+    // Standard-Zeitstempel + Meta (analog finishShot)
+    const shot = {
+        timestamp: new Date().toISOString(),
+        gameTime: formatTime(gameSeconds),
+        gameMinutesFloor: Math.floor(gameSeconds / 60),
+        gameSeconds,
+        // Minimal-Logik für 7m: Kategorie setzen, aber keine exakten Koordinaten
+        shotCategory: '7m',
+        isGoalkeeperSave: isSave,
+        goalkeeperId: currentGoalkeeper,
+        half: halfAtShot
+        // Hinweis: goalAreaId bewusst weggelassen → Tabelle/Export behandeln '7m' bereits sauber
+    };
+
+    try {
+        shot.id = await addShot(shot);
+    } catch (e) {
+        console.warn('[7m] IDB write failed', e);
+    }
+
+    shots.push(shot);
+
+    // UI konsistent aktualisieren
+    updateStatistics();
+    renderShotTable();
+    renderGkOverviewTable();
+    renderGKStatTable();
+    drawAreas();
+    updateButtonStates();
+
+    const toastEl = showToast(isSave ? '7m – Gehalten' : '7m – Tor', 'update');
+    if (toastEl && !isSave) {
+        // ▼ Rotton mit gutem Kontrast; Border gleich mitziehen
+        toastEl.style.backgroundColor = '#c62828'; // Rot für „Tor“
+        toastEl.style.borderColor = '#c62828';
+        toastEl.style.color = '#fff';
+    }
+}
+
+
+/** Liefert – falls möglich – die getroffene Goal-Area.
+ *  1) Standard-Rechteck/Polygon-Treffer in `goalAreas`
+ *  2) Falls kein Treffer: Mini-Tor-Bereich in 3 × 3 Zellen teilen und Namen (OL..UR) bestimmen
+ */
+function getClickedGoalArea(relX, relY) {
+    const area = findAreaAtPoint(relX, relY, goalAreas);
+    if (area) return area;
+
+    const {x1, y1, x2, y2} = MINI_GOAL_BBOX;
+    if (relX < x1 || relX > x2 || relY < y1 || relY > y2) return null;
+
+    const rx = (relX - x1) / (x2 - x1);
+    const ry = (relY - y1) / (y2 - y1);
+
+    const col = rx < 1 / 3 ? 0 : (rx < 2 / 3 ? 1 : 2); // L/M/R
+    const row = ry < 1 / 3 ? 0 : (ry < 2 / 3 ? 1 : 2); // O/M/U
+
+    const ROW = ['O', 'M', 'U'];
+    const COL = ['L', 'M', 'R'];
+    const key = `${ROW[row]}${COL[col]}`; // 'OM', 'MM', 'UR' …
+
+    return goalAreas.find(g => canonicalSectorName(g.name) === key) || null;
+}
+
+// == 13. Helfer-Funktionen ===============================================
+
+/* ---------- Tor-Sektoren: Kanonisieren + Spiegeln (GK-Perspektive) ---------- */
+
+/* ——— TOP/MID/BOTTOM sauber auf O/M/U mappen ——— */
+function canonicalSectorName(raw) {
+    const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    const MAP = {
+        // EN → Kanon (Oben/Mitte/Unten)
+        'TOP LEFT': 'OL', 'UP LEFT': 'OL', 'UPPER LEFT': 'OL', 'TL': 'OL',
+        'TOP MIDDLE': 'OM', 'TOP CENTER': 'OM', 'TM': 'OM',
+        'TOP RIGHT': 'OR', 'UP RIGHT': 'OR', 'UPPER RIGHT': 'OR', 'TR': 'OR',
+
+        'MID LEFT': 'ML', 'MIDDLE LEFT': 'ML', 'CENTER LEFT': 'ML',
+        'MID MIDDLE': 'MM', 'MIDDLE MIDDLE': 'MM', 'MIDDLE': 'MM', 'CENTER': 'MM',
+        'MID CENTER': 'MM', 'MIDDLE CENTER': 'MM', 'CENTER MIDDLE': 'MM',
+        'MID RIGHT': 'MR', 'MIDDLE RIGHT': 'MR', 'CENTER RIGHT': 'MR',
+
+        'BOTTOM LEFT': 'UL', 'LOW LEFT': 'UL', 'DOWN LEFT': 'UL', 'BL': 'UL',
+        'BOTTOM MIDDLE': 'UM', 'LOW MIDDLE': 'UM', 'DOWN MIDDLE': 'UM', 'BOTTOM CENTER': 'UM', 'BM': 'UM',
+        'BOTTOM RIGHT': 'UR', 'LOW RIGHT': 'UR', 'DOWN RIGHT': 'UR', 'BR': 'UR',
+
+        // Bereits kanonisch (DE)
+        'OL': 'OL', 'OM': 'OM', 'OR': 'OR', 'ML': 'ML', 'MM': 'MM', 'MR': 'MR', 'UL': 'UL', 'UM': 'UM', 'UR': 'UR',
+        // Kürzel "M" aus Default-Goal-Areas auf "MM" normalisieren (einheitliche 2-Buchstaben-Form)
+        'M': 'MM',
+        // Sonderfälle
+        '7M': '7M', '7 M': '7M', '–': '–', '-': '–',
+    };
+    return MAP[s] || s;
+}
+
+
+function mirrorGoalSector(abbrevRaw) {
+    const k = canonicalSectorName(abbrevRaw);
+    const MIRROR = {
+        'OL': 'OR', 'OR': 'OL',
+        'ML': 'MR', 'MR': 'ML',
+        'UL': 'UR', 'UR': 'UL',
+        'OM': 'OM', 'MM': 'MM', 'UM': 'UM',
+        '7M': '7M', '–': '–'
+    };
+    return MIRROR[k] || k;
+}
+
+// Rival-Toggle voll synchron zur eigenen GK-Logik,
+// aber ohne Trikot-„#“, nur „Torwart 1/2“. Farbschema kommt über Klassenwechsel.
+function updateRivalGoalkeeperButton() {
+    const btn = document.querySelector('.gk-overview-toggle-btn');
+    if (!btn) return;
+
+    // Optik-Klasse einmalig sicherstellen
+    btn.classList.add('rivalkeeper-button');
+
+    // neutrales Label – ohne „#“, wie gewünscht
+    btn.textContent = `Torwart ${currentRivalGoalkeeper}`;
+
+    // Farbschema präzise umschalten (1 ↔ 2)
+    btn.classList.toggle('rivalkeeper-1', currentRivalGoalkeeper === 1);
+    btn.classList.toggle('rivalkeeper-2', currentRivalGoalkeeper === 2);
+}
+
+/* ===================================================================
+ * Mini-Feature: Nur die Tokens (RL, RM, RR/LA, RA/DB) visuell halbieren.
+ * – wir wrappen die Treffer mit <span style="font-size: .5em"> </span>
+ * – Selektoren decken jetzt auch die 1. Spalte im <tbody> ab (Σ-Zeile).
+ * ===================================================================*/
+function applySmallAbbrevStyling() {
+    // Regex für exakte Token-Treffer (Case-insensitive)
+    const RE = /\b(RL|RM|RR\/LA|RA\/DB)\b/gi;
+
+    // Ziele – Thead-Header, 1. Spalte im Body (enthält "#1 Σ …"), Positions-Buttons
+    const selectors = [
+        '#gk-stat-table thead th',
+        '#gk-stat-table tbody tr td:first-child', // Σ-Zeile mit "#1 Σ RL …"
+        '#rival-gk-stat-table thead th',
+        '.gk-overview-positions-btns-container .gk-overview-action-btn'
+    ].join(', ');
+
+    document.querySelectorAll(selectors).forEach(el => {
+        // Doppelte Anwendung vermeiden
+        if (el.querySelector('.abbr--half')) return;
+
+        // Nur das Vorkommen der Tokens wrappen – Rest unverändert lassen
+        const html = el.innerHTML;
+        const wrapped = html.replace(
+            RE,
+            '<span class="abbr--half" style="font-size:0.5em">$1</span>'
+        );
+
+        if (wrapped !== html) {
+            el.innerHTML = wrapped;
         }
     });
 }
 
-// == 13. Helfer-Funktionen ===============================================
+/**
+ * Schreibt für eine Tabellenzeile (tr) die Felder „Paraden/gesamt“ (TOTAL_IDX)
+ * und „%“ (PERCENT_IDX) anhand der bereits eingetragenen Werte in
+ * Spalte 2 (Saves) und GOALS_TOTAL_IDX (Gegentore „T“).
+ */
+function writeTotalsForRow(tr) {
+    // --- Deutschsprachige Kommentare (gewünscht) ---------------------
+    const td = tr.children;
+
+    const saves = +(td[2]?.textContent ?? 0) || 0;
+    const goals = +(td[GOALS_TOTAL_IDX]?.textContent ?? 0) || 0;
+    const total = saves + goals;
+
+    if (total > 0) {
+        td[TOTAL_IDX].textContent = `${saves}/${total}`;
+        td[PERCENT_IDX].textContent = Math.round((saves / total) * 100) + '%';
+    } else {
+        // Visuell „ruhig“ halten: leere Felder, wenn keine Events vorliegen
+        td[TOTAL_IDX].textContent = '';
+        td[PERCENT_IDX].textContent = '';
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Schreibt einen einzelnen Shot in eine bestehende Tabellenzeile.
+ * Erwartet: die passende Zeile (richtiger GK + Halbzeit) ist bereits
+ * über ROW_MAP ermittelt; diese Funktion inkrementiert die Zellen.
+ *  - Nutzt Shot-Synonyme (normalize + Fallback über shotAreaMap).
+ *  - Zählt Paraden gesamt (Spalte 2), Gegentore gesamt (GOALS_TOTAL_IDX)
+ *    und die wurfartspezifischen Spalten (LEFT_COL_MAP/RIGHT_COL_MAP).
+ * ------------------------------------------------------------------ */
+function applyShotToRow(tr, sh) {
+    const td = tr.children;
+
+    // 1) Wurfkategorie robust bestimmen (Shot-Feld → Fallback auf Area-Name)
+    const areaName = shotAreaMap.get(sh.shotAreaId)?.name ?? '';
+    const baseName = normalize(sh.shotCategory ?? areaName);
+
+    // 2) Auf Spalten-Key mappen; Unbekanntes ignorieren
+    const colKey = AREA_TO_COL[baseName];
+    if (!colKey) return;
+
+    // 3) Links (Parade) vs. rechts (Gegentor) hochzählen
+    if (sh.isGoalkeeperSave) {
+        // Paraden gesamt
+        td[2].textContent = ((+td[2].textContent) || 0) + 1;
+        // Paraden je Wurfart
+        td[LEFT_COL_MAP[colKey]].textContent =
+            ((+td[LEFT_COL_MAP[colKey]].textContent) || 0) + 1;
+    } else {
+        // Gegentore je Wurfart
+        td[RIGHT_COL_MAP[colKey]].textContent =
+            ((+td[RIGHT_COL_MAP[colKey]].textContent) || 0) + 1;
+        // T gesamt
+        td[GOALS_TOTAL_IDX].textContent =
+            ((+td[GOALS_TOTAL_IDX].textContent) || 0) + 1;
+    }
+}
+
+/**
+ * Ermittelt die aktuell gültige Halbzeit (1/2) auf Basis der zentralen
+ * Logik in `currentHalf()`. Dieser Helper dient dazu, die Halbzeit
+ * **beim Erfassen** eines Ereignisses stabil zu übernehmen, ohne die
+ * Bedingung an mehreren Stellen zu duplizieren (DRY).
+ * @returns {1|2}
+ */
+function computeHalfAtNow() {
+    // Delegation an `currentHalf()` hält die Logik zentral.
+    return currentHalf();
+}
+
+// Liefert den Index des letzten eigenen Shots *für den aktuellen Keeper* oder -1.
+// (RIVAL-Shots werden ignoriert.)
+function lastOwnShotIndexForCurrentGK() {
+    for (let i = shots.length - 1; i >= 0; i--) {
+        const s = shots[i];
+        if (s.team !== 'rival' && (s.goalkeeperId ?? 1) === currentGoalkeeper) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 // ——— Helper: Ass-Zähler komplett zurücksetzen ——————————————
-async function resetAssCounters() {
-    // 1) In-Memory zurücksetzen
+/** Setzt alle Zähler (beide Keeper × beide Halbzeiten) auf 0 und aktualisiert Badge/Tabellen. */
+async function resetAssCounters(skipRender = false) {
+    // 1) In-Memory auf Werkseinstellung
     ass = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
 
-    // 2) Persistenz
+    // 2) Persistieren
     await setAss(ass);
 
-    // 3) UI refresh
+    // 3) UI-Update (Badge sofort)
     updateAssBadge();
-    renderGKStatTable();
 
-    // 4) „−“-Button deaktivieren
+    // 4) Große GK-Tabelle nur rendern, wenn kein Batch-Reset läuft
+    if (!skipRender) renderGKStatTable();
+
+    // 5) Minus-Button deaktivieren (0 kann nicht weiter dekrementiert werden)
     const dec = document.getElementById('ass-decrement');
     if (dec) dec.disabled = true;
 }
 
-/* Helper: 7g6 komplett zurücksetzen */
-async function resetSevenG6Counters() {
+/** Setzt alle Zähler (beide Keeper × beide Halbzeiten) auf 0 und aktualisiert Badge/Tabellen. */
+async function resetSevenG6Counters(skipRender = false) {
+    // Datenstruktur komplett zurücksetzen (#1/#2 × HZ1/HZ2)
     sevenG6 = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
+
     await setSevenG6(sevenG6);
+
+    // Badge sofort aktualisieren (Halbzeit-/GK-abhängig)
     updateSevenG6Badge();
-    renderGKStatTable();
-    document.getElementById('seven-g6-decrement').disabled = true;
+
+    // Tabelle nur aufbauen, wenn nicht gebatcht
+    if (!skipRender) renderGKStatTable();
+
+    const dec = document.getElementById('seven-g6-decrement');
+    if (dec) dec.disabled = true;
 }
 
-async function resetTorCounters() {
-
+/** Setzt alle Zähler (beide Keeper × beide Halbzeiten) auf 0 und aktualisiert Badge/Tabellen. */
+async function resetTorCounters(skipRender = false) {
+    // Eigene-Tore-Zähler für beide Keeper auf 0 setzen
     torCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
+
     await setTor(torCount);
 
+    // Badge sofort updaten
     updateTorBadge();
-    renderGKStatTable();
 
-    document.getElementById('tor-decrement').disabled = true;
+    // GK-Stat-Tabelle nur neu zeichnen, wenn kein Batch-Reset läuft
+    if (!skipRender) renderGKStatTable();
+
+    const dec = document.getElementById('tor-decrement');
+    if (dec) dec.disabled = true;
 }
 
-async function resetTFCounters() {
+/** Setzt alle Zähler (beide Keeper × beide Halbzeiten) auf 0 und aktualisiert Badge/Tabellen. */
+async function resetTFCounters(skipRender = false) {
+    // Technische-Fehler-Zähler für beide Keeper auf 0 setzen
     tfCount = {1: {1: 0, 2: 0}, 2: {1: 0, 2: 0}};
+
     await setTF(tfCount);
+
+    // Badge sofort updaten
     updateTFBadge();
-    renderGKStatTable();
-    document.getElementById('tf-decrement').disabled = true;
+
+    // GK-Stat-Tabelle nur neu zeichnen, wenn kein Batch-Reset läuft
+    if (!skipRender) renderGKStatTable();
+
+    const dec = document.getElementById('tf-decrement');
+    if (dec) dec.disabled = true;
 }
 
-// ——— Ende Helper ————————————————————————————————————————————————
+/* ---------- Spalten-Layout ----------
+   Feste Indizes: wichtig, um sowohl Paraden- als auch Gegentor-Spalten
+   zuverlässig zu treffen. COLS = 33 → Indizes 0..32.
+   Die Maps LEFT_COL_MAP/RIGHT_COL_MAP sind dabei die einzigen "Wahrheiten"
+   für Zonen→Spalte. */
+const ASS_IDX = 14; // Spalte Ass
+const TOR_HEAD_IDX = 15; // Spalte „Tor“ (eigene Tore, nicht Gegentore!)
+const DIVIDER_IDX = 16; // Visueller Trenner
+const GOALS_TOTAL_IDX = 17; // Spalte „T“ (Gegentore insgesamt)
+const SEVENG6_IDX = COLS - 4; // 29: 7g6 (manueller Zähler)
+const TF_IDX = COLS - 3; // 30: Technische Fehler
+const TOTAL_IDX = COLS - 2; // 31: Quote Zähler "Paraden/gesamt"
+const PERCENT_IDX = COLS - 1; // 32: Prozentzahl „%“
 
-/* ---------- Spalten-Layout ---------- */
-const ASS_IDX = 14; // Spalte „Ass“
-const TOR_HEAD_IDX = 15; // Spalte „Tor“ (eigene Tore)
-const DIVIDER_IDX = 16; // Trennspalte
-const GOALS_TOTAL_IDX = 17; // Spalte „T“
-const TOTAL_IDX = COLS - 2; // Gesamt
-const PERCENT_IDX = COLS - 1; // %
-const SEVENG6_IDX = COLS - 4; // 7g6
-const TF_IDX = COLS - 3; // TF
+/* ----------------------------------------------------------------------
+ Summenzeile (Coach-Wunsch): nur bestimmte Wurfarten einbeziehen
+ – Rückraum: rl, rm, rr
+ – Außen: la, ra
+ – Durchbruch: dl, dm, dr
+ Legacy-Fall: ältere Datensätze haben „db“/„durchbruch“ → zählen als Durchbruch.
+ Wir werten deshalb direkt über `shots` aus (nicht über Tabellenspalten),
+ um diese Synonyme sicher zu erwischen.
+---------------------------------------------------------------------- */
+const SUM_INCLUDED_KEYS = new Set([
+    'rl', 'rm', 'rr',
+    'la', 'ra',
+    'dl', 'dm', 'dr',
+    'db', 'durchbruch' // Legacy-Synonyme
+]);
 
+// Normalisierung: Umlaute/ß entfernen, lowercasing
+// so matchen wir zuverlässig auch legacy-Bezeichnungen auf AREA_TO_COL.
+// Normalisierung: Diakritika entfernen, ß→ss, alle Whitespaces entfernen, in Kleinbuchstaben
 const normalize = s => s
-    ?.normalize('NFD').replace(/[\u0300-\u036f]/g, '') // ä → a
-    .replace(/ß/g, 'ss');
+    ?.normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Diakritika (Combining Marks) entfernen
+    .replace(/ß/g, 'ss')                               // ß konsistent in ss überführen
+    .replace(/\s+/g, '')                               // alle Leerzeichen-Typen (inkl. NBSP) entfernen
+    .toLowerCase();                                    // abschließend kleinschreiben
 
+/**
+ * Baut die große Aggregations-Tabelle für unsere Keeper (4 Zeilen: #1/#2 × HZ 1/2).
+ * Feste Spaltenindizes (COLS, *_IDX, LEFT/RIGHT_COL_MAP) – zentrale Wahrheit für die Auswertung.
+ * Manuelle Zähler (Ass, Tor, 7g6, TF) werden pro Zeile nachgetragen.
+ */
 function renderGKStatTable() {
     const tbody = document.querySelector('#gk-stat-table tbody');
     if (!tbody) return;
@@ -1525,19 +2316,15 @@ function renderGKStatTable() {
         {gk: 2, half: 2, time: '31-60'}
     ];
 
-    /* Map: key → <tr>-Element */
     const ROW_MAP = {};
     ROW_META.forEach(meta => {
         const key = `${meta.gk}-${meta.half}`;
 
-        /* ----------------------------------------------------------
-           Label ergibt sich jetzt aus der Map GOALKEEPERS:
-               #<Nummer> + „<Halbzeit>. HZ“
-           Beispiel: „#1 1. HZ“ bzw. „#80 2. HZ“
-        ----------------------------------------------------------- */
-        const gkNum = GOALKEEPERS[meta.gk].number;
+        // Fallback auf die GK-ID, falls GOALKEEPERS[] nicht definiert ist
+        const gkNum = GOALKEEPERS[meta.gk]?.number ?? meta.gk;
         const tr = makeEmptyStatRow(`#${gkNum} ${meta.half}. HZ`, meta.time);
 
+        tr.dataset.key = key; // stabiler Schlüssel
         ROW_MAP[key] = tr;
         tbody.appendChild(tr);
     });
@@ -1546,55 +2333,14 @@ function renderGKStatTable() {
     shots.forEach(sh => {
         if (sh.team === 'rival') return; // fremde Keeper ignorieren
         const gk = sh.goalkeeperId ?? 1;
-        const half = sh.gameSeconds < HALF_LENGTH ? 1 : 2; // 30-Min-Grenze
-        const key = `${gk}-${half}`;
-        const tr = ROW_MAP[key];
-
+        const half = sh.half ?? (sh.gameSeconds < HALF_LENGTH ? 1 : 2);
+        const tr = ROW_MAP[`${gk}-${half}`];
         if (!tr) return;
-
-        const td = tr.children;
-
-        // 1) access per id O(1)
-        const areaName = shotAreaMap.get(sh.shotAreaId)?.name ?? '';
-        // 2) shotCategory
-        const baseName = normalize(sh.shotCategory ?? areaName).toLowerCase();
-        const colKey = AREA_TO_COL[baseName];
-
-        if (!colKey) return; // falls unbekannte Kategorie
-
-        if (sh.isGoalkeeperSave) {
-            /* ---- Parade (links) ----------------------------------- */
-            td[2].textContent = +td[2].textContent + 1;
-            td[LEFT_COL_MAP[colKey]].textContent =
-                +td[LEFT_COL_MAP[colKey]].textContent + 1;
-        } else {
-            /* ---- Gegentor (rechts) -------------------------------- */
-            td[RIGHT_COL_MAP[colKey]].textContent =
-                +td[RIGHT_COL_MAP[colKey]].textContent + 1;
-
-            /* Gesamt-Tore (Spalte T) hochzählen */
-            td[GOALS_TOTAL_IDX].textContent =
-                +td[GOALS_TOTAL_IDX].textContent + 1;
-        }
+        applyShotToRow(tr, sh); // ← DRY
     });
 
     /* ---- 3) Gesamt & Quote je Zeile berechnen --------------------- */
-    Object.values(ROW_MAP).forEach(tr => {
-        const td = tr.children;
-        const saves = +td[2].textContent;
-
-        const goals = +td[GOALS_TOTAL_IDX].textContent; // „T“
-        const total = saves + goals;
-
-
-        if (total) { // erst ab mindestens 1 Wurf
-            td[TOTAL_IDX].textContent = `${saves}/${total}`;
-            td[PERCENT_IDX].textContent = Math.round((saves / total) * 100) + '%';
-        } else {
-            td[TOTAL_IDX].textContent = '';
-            td[PERCENT_IDX].textContent = '';
-        }
-    });
+    Object.values(ROW_MAP).forEach(writeTotalsForRow);
 
     for (const gk of [1, 2]) {
         for (const half of [1, 2]) {
@@ -1634,17 +2380,131 @@ function renderGKStatTable() {
 
         }
     }
+
+    /* ------------------------------------------------------------------
+     (4) Zusätzliche Summenzeilen je Torwart (Coach-Wunsch)
+     – Paraden & Gegentore NUR aus RL/RM/RR + LA/RA + DL/DM/DR
+     – aus beiden Halbzeiten zusammengefasst (1.+2. HZ)
+     – nur die Summenspalten setzen (Paraden gesamt, T, Paraden/gesamt, %)
+     – übrige Zellen bewusst leer lassen (UI ruhig halten)
+    ------------------------------------------------------------------ */
+    const appendGKSumRow = (gk) => {
+        /* GK-Label dynamisch aus Metadaten (#<Nummer>) */
+        const gkNum = GOALKEEPERS[gk]?.number ?? gk;
+        const label = `#${gkNum} Σ RL RM RR/LA RA/DB`;
+
+        /* --- Summen robust direkt aus den Shots ermitteln ----------- */
+        let saves = 0, goals = 0;
+        for (const sh of shots) {
+            // nur unsere Keeper (rival ignorieren)
+            if (sh.team === 'rival') continue;
+            const keeper = sh.goalkeeperId ?? 1;
+            if (keeper !== gk) continue;
+
+            // Kategorie normalisieren; Fallback über Shot-Area-Name zulassen
+            const areaName = shotAreaMap.get(sh.shotAreaId)?.name;
+            const base = normalize(sh.shotCategory ?? areaName ?? '');
+            if (!SUM_INCLUDED_KEYS.has(base)) continue; // nicht Teil der Coach-Selektion
+
+            if (sh.isGoalkeeperSave) saves++; else goals++;
+        }
+
+        /* --- Summenzeile aufbauen (nur relevante Spalten beschreiben) */
+        const tr = makeEmptyStatRow(label, 'Σ'); // Spalte 0: GK-Label, Spalte 1: Sigma
+        const td = tr.children;
+
+        // Paraden gesamt (Spalte 2)
+        td[2].textContent = saves ? String(saves) : '';
+        // Gegentore gesamt „T“
+        td[GOALS_TOTAL_IDX].textContent = goals ? String(goals) : '';
+
+        // DRY: Quote/Prozent über gemeinsamen Helper schreiben
+        writeTotalsForRow(tr);
+
+        // dezente Kennzeichnung (optional; ohne CSS bleibt reines Layout)
+        tr.classList.add('gk-sum-row');
+        tbody.appendChild(tr);
+    };
+
+    // Für beide Keeper jeweils eine Summenzeile anhängen
+    appendGKSumRow(1);
+    appendGKSumRow(2);
+
+    // Typografische Halbierung für Tokens anwenden (nach jedem Rebuild)
+    applySmallAbbrevStyling();
+
+    // Hinweis zu Legacy „Durchbruch“: In AREA_TO_COL gibt es sowohl dl/dm/dr als auch die Synonyme
+    // db/durchbruch → 'km'. Daher kann die Summe nicht aus den fertigen Tabellenzellen berechnet werden,
+    // da sie sich mit Würfen von „Kreis“ vermischen würde. Die obige Variante berechnet die Summe anhand der shots,
+    // wodurch die Summenzeile auch solche alten Einträge korrekt berücksichtigt.
 }
 
 /**
- * Aktualisiert den H2-Titel der Statistik-Sektion → wird immer aufgerufen, wenn sich der aktive Torwart ändert.
+ * Aggregations-Tabelle für den Rivalen (gleiches Layout wie unsere Keeper),
+ * aber ohne manuelle Zähler. Bezeichner-Stil bewusst anders („Torwart 1/2 …“)
+ * zur klaren optischen Trennung.
  */
-function updateStatsHeading() {
-    const h2 = document.getElementById('stats-heading');
-    if (!h2) return; // Fallback: Element nicht gefunden
-    h2.textContent = `Shot Statistics – Torwart ${currentGoalkeeper}`;
+function renderRivalGKStatTable() {
+    const tbody = document.querySelector('#rival-gk-stat-table tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    // Meta-Layout: 4 feste Zeilen (#1/#2 × HZ 1/2)
+    const ROW_META = [
+        {gk: 1, half: 1, time: '01-30'},
+        {gk: 1, half: 2, time: '31-60'},
+        {gk: 2, half: 1, time: '01-30'},
+        {gk: 2, half: 2, time: '31-60'}
+    ];
+
+    const ROW_MAP = {};
+    ROW_META.forEach(meta => {
+        const key = `${meta.gk}-${meta.half}`;
+
+        // Deutschsprachiger Label-Stil für den Gegner beibehalten:
+        // "Torwart 1 1. HZ" – statt "#1 1. HZ". So ist die UI klar getrennt zu unseren Keepern.
+        const tr = makeEmptyStatRow(`Torwart ${meta.gk} ${meta.half}. HZ`, meta.time);
+        tr.dataset.key = key;
+
+        ROW_MAP[key] = tr;
+        tbody.appendChild(tr);
+    });
+
+    // ---- 2) Rival-Shots einsortieren ----------------------------------
+    shots.forEach(sh => {
+        if (sh.team !== 'rival') return;
+        const gk = sh.goalkeeperId ?? 1;
+        const half = sh.half ?? (sh.gameSeconds < HALF_LENGTH ? 1 : 2);
+        const tr = ROW_MAP[`${gk}-${half}`];
+        if (!tr) return;
+        applyShotToRow(tr, sh); // ← DRY
+    });
+
+    // ---- 3) Gesamt/Quote + manuelle Spalten leeren ---------------------
+    Object.values(ROW_MAP).forEach(tr => {
+        writeTotalsForRow(tr);
+
+        const td = tr.children;
+        // Rival führt keine manuellen Zähler → leer lassen
+        td[ASS_IDX].textContent = '';
+        td[TOR_HEAD_IDX].textContent = '';
+        td[SEVENG6_IDX].textContent = '';
+        td[TF_IDX].textContent = '';
+    });
+
+    // Einheitlich auch im Rival-Table anwenden
+    applySmallAbbrevStyling();
+
 }
 
+/** Setzt die Sektionsüberschrift konsistent auf „Shot Statistics – #<Trikotnummer>“. */
+function updateStatsHeading() {
+    const h2 = document.getElementById('stats-heading');
+    if (!h2) return;
+    h2.textContent = `Shot Statistics – ${gkNumLabel(currentGoalkeeper)}`;
+}
+
+/** Wandelt Client-Koordinaten in relative Canvas-Koordinaten (0…1) um. */
 function getRelCoords(e) {
     const r = canvas.getBoundingClientRect();
     return {
@@ -1653,6 +2513,10 @@ function getRelCoords(e) {
     };
 }
 
+/**
+ * Zeigt einen Toast (update/offline) für 3 s an und gibt das DOM-Element zurück
+ * (z. B. für Klick-Handler beim SW-Update).
+ */
 function showToast(msg, variant = 'update') {
     const container = document.getElementById('toast-container');
     if (!container) return null; // Fallback: kein Container
@@ -1675,8 +2539,8 @@ function showToast(msg, variant = 'update') {
 }
 
 /**
- * Löscht wirklich ALLES aus UI & IndexedDB.
- * @param {boolean} silent – true ⇒ kein Confirm-Dialog, kein Toast
+ * Entfernt alle Shots (RAM + IndexedDB) und baut alle Sichten neu auf.
+ * Optional „silent“ (ohne Confirm/Toast) für Batch-Resets.
  */
 async function clearAllData(silent = false) {
     /* Dialog nur zeigen, wenn nicht „silent“ */
@@ -1684,16 +2548,18 @@ async function clearAllData(silent = false) {
 
     // ── Runtime-Arrays & UI ───────────────────────
     shots = [];
-    rivalShots = [];
 
     updateStatistics();
     renderShotTable();
+    renderRivalShotTable();
+    renderRivalGKStatTable();
+    renderGkOverviewTable();
     renderGKStatTable();
     drawAreas();
 
     /* --- Rival-Tabelle & Buttons zurücksetzen ----------- */
-    renderRivalShotTable();
     enableRivalActionBtns(false);
+    updateRivalUndoState();
 
     // ── IndexedDB Store leeren ────────────────────
     try {
@@ -1710,25 +2576,18 @@ async function clearAllData(silent = false) {
 }
 
 /**
- * Setzt *alles* auf Werkseinstellungen zurück:
- *   • alle Shots löschen • Timer anhalten & auf 0
- *   • UI-Workflow zurück • Torwart = 1
- *   • sämtliche Buttons/Indikatoren zurück
+ * Werkseinstellung: Shots/Zähler/Timer/GK/Show-Lines/Match-Info zurücksetzen,
+ * UI konsistent aktualisieren und Abschluss-Toast zeigen.
  */
 async function hardResetGame() {
     /* 1) Alle Shots & Statistik zurücksetzen */
     await clearAllData(true);
-    rivalShots = [];
-    renderGKStatTable();
 
-    /* 1a) Ass-Zähler wieder auf 0 setzen */
-    await resetAssCounters();
-    /* 1b) Ass-Zähler wieder auf 0 setzen */
-    await resetSevenG6Counters();
-    // 1c) Tor-Zähler zurücksetzen
-    await resetTorCounters();
-    // 1d) Technische Fehler zurücksetzen
-    await resetTFCounters();
+    /* 1a–1d) Zähler in einem Batch zurücksetzen – ohne Zwischen-Render */
+    await resetAssCounters(true);
+    await resetSevenG6Counters(true);
+    await resetTorCounters(true);
+    await resetTFCounters(true);
 
     /* 2) Registrierung zurücksetzen */
     resetRegistrationProcess(); // Step-Indikator & Buttons
@@ -1742,6 +2601,10 @@ async function hardResetGame() {
     document.getElementById('reset-btn').disabled = false;
     await setGameTimerState(0, false);
 
+    // --- 2. HZ-Flag hart zurücksetzen (werksseitig) -------------------------
+    secondHalfStarted = false;
+    saveSecondHalfStarted();
+
     /* 4) Torwart wieder auf „1“ stellen */
     currentGoalkeeper = 1;
     await setCurrentGoalkeeper(1);
@@ -1749,6 +2612,7 @@ async function hardResetGame() {
     currentRivalGoalkeeper = 1;
     await setCurrentRivalGoalkeeper(1);
 
+    updateRivalGoalkeeperButton(); // Kachel & Farbe sofort korrekt setzen
     updateGoalkeeperButton();
     refreshHalfDependentUI();
     updateStatsHeading();
@@ -1758,6 +2622,7 @@ async function hardResetGame() {
     const toggle = document.getElementById('show-lines-toggle');
     if (toggle) toggle.checked = false;
     await setShowShotLines(false);
+
     drawAreas();
 
     /* 6) Match-Info zurücksetzen */
@@ -1781,13 +2646,13 @@ async function hardResetGame() {
 
         // Match-Info-Felder komplett leeren
         [
-            'team-input',       // Team
-            'opponent-input',   // Gegner
-            'halftime-input',   // Halbzeit
-            'fulltime-input',   // Endstand
-            'competition-input',// Wettbewerb
-            'date-input',       // Datum
-            'location-input'    // Spielort
+            'team-input', // Team
+            'opponent-input', // Gegner
+            'halftime-input', // Halbzeit
+            'fulltime-input', // Endstand
+            'competition-input', // Wettbewerb
+            'date-input', // Datum
+            'location-input' // Spielort
         ].forEach(idClear);
 
     } catch (err) {
@@ -1799,62 +2664,80 @@ async function hardResetGame() {
 }
 
 /**
- * Initialisiert den Torwart-Toggle-Button.
- * – Umschalten 1 ↔ 2 ändert sofort Statistik, Überschrift & Button-Design.
+ * Initialisiert den GK-Toggle:
+ * – stellt beim Laden den letzten Keeper aus IndexedDB wieder her
+ * – bindet den Klick zum Umschalten (1 ↔ 2)
+ * – aktualisiert alle abhängigen UI-Teile in konsistenter Reihenfolge
  */
 async function changeGoalkeeper() {
     /* --- DOM-Referenz & Startwert aus IndexedDB --------------- */
     const btn = document.getElementById('change-goalkeeper-btn');
+
     if (!btn) {
         console.warn('[GK] Button »change-goalkeeper-btn« nicht gefunden');
         return;
     }
+
     // Letzten Keeper aus IndexedDB laden (Default = 1)
     currentGoalkeeper = await getCurrentGoalkeeper();
 
-    /* --- UI auf Initialwert bringen --------------------------- */
-    updateGoalkeeperButton();
-    refreshHalfDependentUI();
-    updateStatsHeading();
-    updateStatistics();
-    renderShotTable();
-    drawAreas();
-    renderGKStatTable();
+    /* --- UI auf Initialwert bringen ---------------------------
+       WICHTIG: Reihenfolge so lassen, damit alle abhängigen
+       Anzeigen konsistent zum geladenen GK sind. */
+    updateGoalkeeperButton(); // Badge/Style
+    refreshHalfDependentUI(); // Halbzeitabhängige Badges + GK-Stat
+    updateStatsHeading(); // H2-Überschrift
+    updateStatistics(); // Boxen (Shot/Goal-Areas)
+    renderShotTable(); // rechts: letzte Würfe (eigene)
+    renderGkOverviewTable(); // links: eigene Verlaufs-Tabelle (direkt beim Initial-Load!)
+    drawAreas(); // Canvas-Layer
+    updateButtonStates(); // Undo-Status passend zum geladenen GK
 
     /* --- Klick-Handler binden --------------------------------- */
-    btn.addEventListener('click', async () => {
-        /* 3.1 Keeper umschalten (1 ⇄ 2) */
-        currentGoalkeeper = currentGoalkeeper === 1 ? 2 : 1;
+    if (!btn.dataset.bound) {
+        btn.addEventListener('click', async () => {
+            // Optional: laufenden Registrierungs-Flow beim GK-Wechsel sauber abbrechen
+            // (Verhindert, dass eine angefangene Wurf-/Tor-Zuordnung dem falschen Keeper zugeordnet wird)
+            resetRegistrationProcess();
 
-        /* 3.2 Oberfläche anpassen: Button, Statistik & Überschrift */
-        updateGoalkeeperButton();
-        refreshHalfDependentUI();
-        updateStatsHeading();
-        updateStatistics();
-        renderShotTable();
-        renderGkOverviewTable();
-        renderGKStatTable();
-        drawAreas();
+            // 1) Keeper umschalten (1 ⇄ 2)
+            currentGoalkeeper = (currentGoalkeeper === 1 ? 2 : 1);
 
-        /* 3.3 Persistent speichern */
-        try {
-            await setCurrentGoalkeeper(currentGoalkeeper);
-        } catch (err) {
-            console.error('[GK] IndexedDB-Speichern fehlgeschlagen:', err);
-            showToast('Torwart-Wechsel konnte nicht gespeichert werden', 'offline');
-        }
-    });
+            // 2) Oberfläche konsistent neu aufbauen
+            updateGoalkeeperButton(); // Badge/Style
+            refreshHalfDependentUI(); // Halbzeitabhängige Badges + GK-Stat (enthält renderGKStatTable)
+            updateStatsHeading();
+            updateStatistics();
+            renderShotTable();
+            renderGkOverviewTable();
+
+            drawAreas();
+            // 3) Undo-/Button-States nach dem Wechsel aktualisieren
+            updateButtonStates();
+
+            // 4) Persistenz
+            try {
+                await setCurrentGoalkeeper(currentGoalkeeper);
+            } catch (err) {
+                console.error('[GK] IndexedDB-Speichern fehlgeschlagen:', err);
+                showToast('Torwart-Wechsel konnte nicht gespeichert werden', 'offline');
+            }
+        });
+
+        btn.dataset.bound = '1';
+    }
+
 }
 
-/**
- * Setzt den Text + Farbe der Torwart-Button entsprechend der akt. Auswahl.
- */
+/** Aktualisiert Label (#<Nummer> Name) und Farbschema des GK-Toggles. */
 function updateGoalkeeperButton() {
     const btn = document.getElementById('change-goalkeeper-btn');
+    if (!btn) return;
+
     const {number, name} = GOALKEEPERS[currentGoalkeeper] ??
     {number: currentGoalkeeper, name: ''};
 
-    /* Badge-Markup:  <span class="gk-num">#1</span> Hernandez */
+    /* Badge-Markup: <span class="gk-num">#1</span> Hernandez */
     btn.innerHTML = `<span class="gk-num">#${number}</span> ${name}`;
     btn.dataset.goalkeeperId = currentGoalkeeper;
 
@@ -1862,29 +2745,19 @@ function updateGoalkeeperButton() {
     btn.classList.add(`goalkeeper-${currentGoalkeeper}`);
 }
 
+/** Macht den letzten eigenen Wurf des aktuellen Keepers rückgängig (RAM + DB), inkl. UI-Refresh. */
 async function undoLastShot() {
-    /* -----------------------------------------------------------------
-        1. Früh-Exit, falls überhaupt keine Würfe vorliegen
-        (verhindert TypeError bei shots.pop() → undefined.id)
-------------------------------------------------------------------*/
-    if (shots.length === 0) {
-        showToast('Keine Shots zum Rückgängigmachen', 'offline');
+    // 1) Keeper-spezifisch den passenden Eintrag suchen
+    const idx = lastOwnShotIndexForCurrentGK();
+    if (idx < 0) {
+        // Deutliches Feedback: kein Eintrag für *diesen* Keeper
+        showToast('Kein Shot für diesen Torwart zum Rückgängigmachen', 'offline');
         return;
     }
 
-    /* -----------------------------------------------------------------
-       2. Letzter Eintrag gehört dem Gegner? → Hinweis & Abbruch
-    ------------------------------------------------------------------*/
-    if (shots.at(-1)?.team === 'rival') {
-        showToast(
-            'Letzter Wurf = Gegner – Undo rechts benutzen.',
-            'offline'
-        );
-        return;
-    }
-
-    const last = shots.pop(); // RAM
-    if (last.id) { // bereits in DB → löschen
+    // 2) Entfernen (RAM + ggf. DB)
+    const last = shots.splice(idx, 1)[0];
+    if (last?.id) {
         try {
             await deleteShot(last.id);
         } catch {
@@ -1892,101 +2765,100 @@ async function undoLastShot() {
         }
     }
 
-    /* Offline-Shots (id undefined) sind damit einfach aus dem Array entfernt. */
+    // 3) UI neu aufbauen (nur unsere Sichten)
     updateStatistics();
     renderShotTable();
+    renderGkOverviewTable();
     renderGKStatTable();
     drawAreas();
     showToast('Letzter Shot zurückgenommen', 'update');
+
+    // 4) Buttons/States aktualisieren (abhängig vom akt. Keeper)
     updateButtonStates();
 }
 
+/** Zeichnet einen temporären Marker an relativer Position (Helfer für den Workflow). */
 function paintTempMarker(relX, relY, color = COLOR_TEMP_MARKER) {
     const {x, y} = relToCanvas(relX, relY, canvas);
     drawMarker(ctx, x, y, 8, color);
 }
 
 // == 14. Export & Download =============================================
-//  -------------------------------------------------------------------
-//  Vollständige exportData-Funktion mit Lade-Guard für XLSX
-// =====================================================================
+
 /**
- * Exportiert alle Shot-Datensätze nach XLSX und speichert parallel
- * einen Screenshot des Canvas als PNG.
- *
- * Das Alias const XLSX = window.XLSX wird erst nach erfolgreicher Guard-Prüfung erzeugt.
- * Dadurch kein Race-Condition-Risiko mehr, wenn die Bibliothek
- * beim Seiten-Reload noch nicht fertig geladen ist.
+ * Exportiert alle Shots als XLSX (SheetJS) und speichert parallel einen Canvas-Screenshot (PNG).
+ * Guard: Export-Button ist erst aktiv, wenn XLSX geladen; zusätzlicher Runtime-Check zur Sicherheit.
  */
 function exportData() {
-    /* ================================================================
-       1) Guard – ist SheetJS (xlsx.full.min.js) bereits vollständig
-          geladen?  Wir prüfen:
-            a) window.XLSX → globales Objekt existiert
-            b) window.XLSX.utils → Unterobjekt mit json_to_sheet etc.
-       ================================================================ */
-    if (!window.XLSX || !window.XLSX.utils) {
+    /* --- Lokale Aliase aus dem CDN-Global ziehen (IDE-freundlich) ---
+       JSDoc-Annotation @type {any} verhindert "Unresolved function/method" in der IDE,
+       weil utils/json_to_sheet/... zur Laufzeit existieren, aber statisch nicht bekannt sind. */
+    /** @type {any} */
+    const xlsx = window.XLSX;
+    /** @type {any} */
+    const utils = xlsx && xlsx.utils;
+
+    /* Guard: Bibliothek oder utils fehlen noch (z. B. sehr früher Klick) */
+    if (!xlsx || !utils) {
         showToast('XLSX-Bibliothek lädt noch … bitte kurz warten', 'offline');
-        return; // frühzeitig abbrechen
+        return;
     }
 
-    /* 1a) Kurz-Alias NACH erfolgreicher Prüfung anlegen -------------- */
-    /** @type {typeof import('xlsx')} */ // JSDoc-Typ für IntelliSense
-    const XLSX = window.XLSX; // garantiert vollständig
-
-    /* ================================================================
-       2) Zweiter Guard – gibt es überhaupt Daten?
-       ================================================================ */
+    /* Keine Daten? */
     if (!shots.length) {
         alert('Keine Daten zum Exportieren.');
         return;
     }
 
-    /* ================================================================
-       3) XLSX-Export (try/catch für robuste Fehlerbehandlung)
-       ================================================================ */
+    /* Dateisystemfreundlicher Zeitstempel */
+    const stamp = new Date()
+        .toISOString()
+        .slice(0, 19)
+        .replace(/[:T]/g, '-');
+
     try {
-        /* 3.1 Arbeitsblatt aus unseren Shot-Objekten erzeugen */
-        const sheet = XLSX.utils.json_to_sheet(shots);
 
-        /* 3.2 Neues Workbook anlegen und Blatt einfügen */
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, sheet, 'Shots');
+        // Für den Export eine abgeleitete Spalte "goalSectorGK" anfügen
+        const exportRows = shots.map(s => ({
+            ...s,
+            exactShotX: s.exactShotPos?.x ?? null,
+            exactShotY: s.exactShotPos?.y ?? null,
+            exactGoalX: s.exactGoalPos?.x ?? null,
+            exactGoalY: s.exactGoalPos?.y ?? null,
+            goalSectorGK: s.team !== 'rival'
+                ? (() => {
+                    const is7 = normalize(s.shotCategory ?? (shotAreaMap.get(s.shotAreaId)?.name ?? '')) === '7m';
+                    const raw = is7 ? '7m' : (goalAreaMap.get(s.goalAreaId)?.name ?? '');
+                    return mirrorGoalSector(raw);
+                })()
+                : ''
+        }));
+        const sheet = utils.json_to_sheet(exportRows);
 
-        /* 3.3 Workbook in einen ArrayBuffer schreiben */
-        const wBout = XLSX.write(wb, {bookType: 'xlsx', type: 'array'});
+        const wb = utils.book_new();
+        utils.book_append_sheet(wb, sheet, 'Shots');
 
-        /* 3.4 Blob erzeugen + Download triggern */
-        const xlsxBlob = new Blob(
-            [wBout],
-            {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
-        );
-
-        triggerDownload(
-            xlsxBlob,
-            `SCM-Shots_${new Date().toISOString().slice(0, 19)}.xlsx`
-        );
-
+        /* 2) XLSX als ArrayBuffer schreiben und herunterladen */
+        const wBout = xlsx.write(wb, {bookType: 'xlsx', type: 'array'});
+        const xlsxBlob = new Blob([wBout], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+        triggerDownload(xlsxBlob, `SCM-Shots_${stamp}.xlsx`);
     } catch (err) {
         console.error('[Export] XLSX fehlgeschlagen:', err);
         alert('XLSX-Export fehlgeschlagen – siehe Konsole.');
     }
 
-    /* ================================================================
-       4) PNG-Screenshot des Canvas als Bonus
-       ================================================================ */
-    canvas.toBlob(blob => {
-        if (!blob) return;
-        triggerDownload(
-            blob,
-            `SCM-ShotCanvas_${new Date().toISOString().slice(0, 19)}.png`
-        );
-    });
+    /* 3) Canvas-Screenshot parallel speichern (PNG) – defensiv prüfen */
+    if (canvas && canvas.toBlob) {
+        canvas.toBlob(blob => {
+            if (!blob) return;
+            triggerDownload(blob, `SCM-ShotCanvas_${stamp}.png`);
+        });
+    }
 }
 
-/**
- * Hilfsfunktion: Erzeugt einen temporären Download-Link und klickt ihn.
- */
+/** Hilfsfunktion: erzeugt temporären Download-Link für Blob und klickt ihn programmgesteuert. */
 function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2001,6 +2873,7 @@ function triggerDownload(blob, filename) {
 }
 
 // == 15. Service-Worker Lifecycle =======================================
+/** Registriert den Service Worker und zeigt ein In-App-Update-Prompt, sobald eine neue Version bereitsteht. */
 function initServiceWorkerLifecycle() {
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker
@@ -2025,10 +2898,7 @@ function initServiceWorkerLifecycle() {
     );
 }
 
-/**
- * Ändert den Ass-Zähler um den Delta-Wert.
- * @param {number} delta – Änderungsschritt: z.B. +1 oder -1
- */
+/** Ändert den jeweiligen Zähler um `delta` (niemals < 0), speichert und aktualisiert UI/Tabellen. */
 async function changeAss(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
@@ -2051,16 +2921,15 @@ async function changeAss(delta) {
     renderGKStatTable();
 }
 
-/**
- * Ändert den 7g6-Zähler um «delta».
- * @param {number} delta – Änderungsschritt: z.B. +1 oder -1
- */
+/** Ändert den jeweiligen Zähler um `delta` (niemals < 0), speichert und aktualisiert UI/Tabellen. */
 async function changeSevenG6(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
     if (delta < 0 && sevenG6[gk][half] === 0) {
-        document.getElementById('seven-g6-decrement').disabled = true;
+        const dec = document.getElementById('seven-g6-decrement');
+        if (dec) dec.disabled = true;
+
         return;
     }
 
@@ -2071,12 +2940,15 @@ async function changeSevenG6(delta) {
     renderGKStatTable();
 }
 
+/** Ändert den jeweiligen Zähler um `delta` (niemals < 0), speichert und aktualisiert UI/Tabellen. */
 async function changeTor(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
     if (delta < 0 && torCount[gk][half] === 0) {
-        document.getElementById('tor-decrement').disabled = true;
+        const dec = document.getElementById('tor-decrement');
+        if (dec) dec.disabled = true;
+
         return;
     }
 
@@ -2087,12 +2959,15 @@ async function changeTor(delta) {
     renderGKStatTable();
 }
 
+/** Ändert den jeweiligen Zähler um `delta` (niemals < 0), speichert und aktualisiert UI/Tabellen. */
 async function changeTF(delta) {
     const gk = currentGoalkeeper;
     const half = currentHalf();
 
     if (delta < 0 && tfCount[gk][half] === 0) {
-        document.getElementById('tf-decrement').disabled = true;
+        const dec = document.getElementById('tf-decrement');
+        if (dec) dec.disabled = true;
+
         return;
     }
 
@@ -2103,6 +2978,7 @@ async function changeTF(delta) {
     renderGKStatTable();
 }
 
+/** Zeigt Update-Toast; beim Klick sendet `SKIP_WAITING` an den wartenden SW und lädt danach neu. */
 function promptUserToUpdate(reg) {
     const toast = showToast(
         'Update verfügbar – hier tippen, um neu zu laden',
@@ -2112,9 +2988,16 @@ function promptUserToUpdate(reg) {
     if (!toast) return;
     toast.addEventListener('click', () => {
         if (reg.waiting) {
+            // Wartenden SW aktivieren …
             reg.waiting.postMessage({type: 'SKIP_WAITING'});
+            // … und die Seite kurz danach neu laden (robust gegen minimale Aktivierungsverzögerung).
+            setTimeout(() => {
+                try {
+                    window.location.reload();
+                } catch {
+                }
+            }, 250);
         }
-
     });
 }
 

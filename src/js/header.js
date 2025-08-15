@@ -142,6 +142,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         // Labels
         const lbls = ['Hell', 'Dunkel'];
+        let sliderSlot = null;
         lbls.forEach((t, i) => {
             const l = document.createElement('span');
             l.textContent = t;
@@ -152,6 +153,10 @@ document.addEventListener("DOMContentLoaded", async () => {
                 const sep = document.createElement('div');
                 sep.style.flex = '1 1 8px';
                 wrap.appendChild(sep);
+                // Den ersten Trenner als „Anker“ für den Slider verwenden
+                if (i === 0 && !sliderSlot) {
+                    sliderSlot = sep;
+                }
             }
         });
 
@@ -167,8 +172,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         slider.addEventListener('input', e => {
             applyTheme(themeModes[Number(e.target.value)]);
         });
-        // Positionierung zwischen Label 1 und Label 3
-        wrap.children[1].appendChild(slider);
+
+        // Zuverlässiges Einfügen: in den ersten „Trenner“
+        (sliderSlot ?? wrap).appendChild(slider);
         return wrap;
     };
 
