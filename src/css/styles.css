@@ -1735,7 +1735,7 @@ button.btn-secondary:disabled {
 /* + = Tor    */
 
 .gk-overview-action-btn.active-pos .rival-label {
-    /* Wenn Pos. ausgewählt → Label leicht hervorheben */
+    /* Wenn Pos. ausgewählt - Label leicht hervorheben */
     filter: brightness(1.2);
 }
 
@@ -1801,6 +1801,100 @@ button.btn-secondary:disabled {
     position: absolute; /* bleibt wie bisher */
     z-index: 2147483647; /* praktisch "oberste" Ebene */
     pointer-events: auto; /* sicherstellen, dass der Button klickbar bleibt */
+}
+
+/* ===== Radialer Editor (W-Zelle) ==================================== */
+/* Root ist absolut positioniert und klickt "durch" nur, wenn offen */
+.shot-radial {
+    position: fixed;
+    left: 0; top: 0; /* wird per JS gesetzt */
+    transform: translate(-50%, -50%) scale(.85);
+    opacity: 0;
+    transition: transform .12s ease, opacity .12s ease;
+    z-index: 2147483647; /* über allem, auch Canvas */
+    pointer-events: none; /* geschlossen nicht interaktiv */
+}
+
+.shot-radial.is-open {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.shot-radial__core {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    background: #2b2b2b;
+    color: #fff;
+    font-weight: 700;
+    display: grid; place-items: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,.4);
+}
+
+.shot-radial__ring {
+    position: absolute;
+    left: 0; top: 0;
+}
+
+.shot-radial__opt {
+    position: absolute;
+    left: 0; top: 0;
+    transform: translate(0,0); /* wird dynamisch ergänzt */
+    width: 40px; height: 40px;
+    border-radius: 999px;
+    border: 1px solid #3a3a3a;
+    background: #fff;
+    color: #111;
+    font-weight: 700;
+    box-shadow: 0 2px 6px rgba(0,0,0,.25);
+    cursor: pointer;
+
+    /* --- Zentrierung des Labels (neu) -------------------------------- */
+    display: inline-flex;        /* stabile Box für zentrierten Inhalt */
+    align-items: center;         /* vertikal mittig */
+    justify-content: center;     /* horizontal mittig */
+    text-align: center;          /* Fallback für Mehrzeiler */
+    line-height: 1;              /* verhindert Baseline-Shift */
+    padding: 0;                  /* keine Innenabstände, die verschieben könnten */
+}
+
+/*.shot-radial__opt:hover,
+.shot-radial__opt:focus {
+    outline: none;
+    border-color: #0aa84f; !* dezent grün *!
+    box-shadow: 0 4px 10px rgba(0,0,0,.35);
+}*/
+
+/* Hover + Tastaturfokus – mit deutlich sichtbarem Ring */
+.shot-radial__opt:hover,
+.shot-radial__opt:focus,
+.shot-radial__opt:focus-visible {
+    outline: none; /* Browser-Outline aus, wir liefern eigenen Fokus */
+    border-color: #0aa84f; /* innerer Rand bleibt grün */
+
+    /* --- kräftiger, mehrstufiger Effekt ---------------------------------
+       1) Tieferer Drop-Shadow
+       2) Scharfes grünes „Kant“-Ring (ohne Layout-Sprung)
+       3) Weiche grüne Aura für mehr Präsenz
+    --------------------------------------------------------------------- */
+    box-shadow:
+            0 8px 18px rgba(0,0,0,.50),  /* tiefere Schattenebene */
+            0 0 0 2px #0aa84f,           /* scharfer grüner Ring (≈ dickerer Rand) */
+            0 0 0 4px rgba(10,168,79,.22); /* sanfte grüne Aura außen */
+}
+
+/* W-Zellen-Button optisch neutral (übernimmt bestehendes Dark-Theme) */
+.shot-td--cat .shot-edit-btn {
+    padding: 2px 8px;
+    border-radius: 8px;
+    border: 1px solid #3a3a3a;
+    background: #1e1e1e;
+    color: inherit;
+    cursor: pointer;
+}
+
+.shot-td--cat .shot-edit-btn:hover {
+    border-color: #5a5a5a;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -5,9 +5,9 @@
         1) App-Shell + offline.html precache (install)
         2) Statisches Caching alter Versionen bereinigen (activate)
         3) Requests bedienen (fetch)
-            • JS, Bilder & Icons → Network-First (Runtime-Cache)
-            • HTML-Navigation → Network-First (+ Offline-Fallback)
-            • Rest →  Cache-First
+            • JS, Bilder & Icons - Network-First (Runtime-Cache)
+            • HTML-Navigation - Network-First (+ Offline-Fallback)
+            • Rest - Cache-First
         4) {type:'SKIP_WAITING'}-Nachricht empfangen (message)
     ---------------------------------------------------------------------- */
 /* ========================== Konstanten ========================== */
@@ -170,7 +170,7 @@ async function networkFirst(request) {
     }
 }
 
-/** Cache-First – Fallback → Network */
+/** Cache-First – Fallback - Network */
 async function cacheFirst(request) {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(request);

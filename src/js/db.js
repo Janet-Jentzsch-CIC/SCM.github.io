@@ -277,6 +277,30 @@ export async function addShot(shot) {
         .store.add(shot); // Rückgabewert ist die neue PK
 }
 
+/** Aktualisiert einen einzelnen Shot per Primärschlüssel (teilweise Felder möglich). */
+// patchOrUpdater kann Objekt ODER Funktion (old - new) sein; gibt das aktualisierte Objekt zurück.
+export async function updateShot(id, patchOrUpdater) {
+    const db = await initDB();
+    const tx = db.transaction(STORE_SHOTS, 'readwrite');
+    const store = tx.store;
+
+    const old = await store.get(id);
+    if (!old) {
+        await tx.done;
+        throw new Error(`[db.updateShot] Kein Datensatz mit id=${id} gefunden`);
+    }
+
+    // patchOrUpdater anwenden (flach mergen) – Funktions- oder Objekt-Form unterstützen
+    const patch = (typeof patchOrUpdater === 'function')
+        ? patchOrUpdater(old)
+        : patchOrUpdater;
+
+    const updated = {...old, ...patch, id}; // ID sicherstellen
+    await store.put(updated);
+    await tx.done;
+    return updated;
+}
+
 /** Fügt mehrere Shots gebündelt hinzu (z.B. Offline-Sync). */
 export async function bulkAddShots(shotsArray) {
     if (!shotsArray.length) return;

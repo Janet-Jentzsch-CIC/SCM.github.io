@@ -200,6 +200,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const matchInfo = await getMatchInfo();
 
+    /* --------------------- GK-Inputs (Name & Nummer) -------------------- */
+    const gk1NameInput = createInputCell(
+        "Torwart #1 – Name", [], "100%", matchInfo.gk1Name || "", "gk1-name-input"
+    );
+    const gk1NumberInput = createInputCell(
+        "Nr", [], "60px", matchInfo.gk1Number || "", "gk1-number-input"
+    );
+
+    const gk2NameInput = createInputCell(
+        "Torwart #2 – Name", [], "100%", matchInfo.gk2Name || "", "gk2-name-input"
+    );
+    const gk2NumberInput = createInputCell(
+        "Nr", [], "60px", matchInfo.gk2Number || "", "gk2-number-input"
+    );
+
+    /* Hilfsfunktion: app.js informieren (live-Update der Badges/Tabellen) */
+    function emitGKMetaChange() {
+        const detail = {
+            gk1: {name: gk1NameInput.value.trim(), number: parseInt(gk1NumberInput.value, 10)},
+            gk2: {name: gk2NameInput.value.trim(), number: parseInt(gk2NumberInput.value, 10)}
+        };
+        window.dispatchEvent(new CustomEvent('gk-meta-change', {detail}));
+    }
+
     /* --------------------- Input-Felder ------------------------------ */
     const teamInput = createInputCell(
         "Team wählen",
@@ -274,17 +298,21 @@ document.addEventListener("DOMContentLoaded", async () => {
         return wrap;
     })();
 
-    /* --------------------- Tabelle rendern -------------------------- */
+    /* --------------------- Input rendern -------------------------- */
     createTable(
         "information-container",
         [
             ["SC Magdeburg -", opponentInput, "Datum", dateInput],
             ["Team", teamInput, "Spielort", locationInput],
             ["Wettbewerb", competitionInput, "", ""],
+            ["Torwart #1", gk1NameInput, "Trikot", gk1NumberInput],
+            ["Torwart #2", gk2NameInput, "Trikot", gk2NumberInput],
         ],
         ["23%", "27%", "23%", "27%"],
         [],
         [
+            ["right", "left", "right", "left"],
+            ["right", "left", "right", "left"],
             ["right", "left", "right", "left"],
             ["right", "left", "right", "left"],
             ["right", "left", "right", "left"],
@@ -313,6 +341,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     fulltimeInput.addEventListener("change", (e) =>
         setMatchInfo("fulltime", e.target.value)
     );
+
+    /* --------------------- GK-Change-Listener --------------------------- */
+    // Jede Änderung sofort speichern und app.js informieren
+    gk1NameInput.addEventListener('change', e => { setMatchInfo('gk1Name', e.target.value); emitGKMetaChange(); });
+    gk1NumberInput.addEventListener('change', e => { setMatchInfo('gk1Number', e.target.value); emitGKMetaChange(); });
+
+    gk2NameInput.addEventListener('change', e => { setMatchInfo('gk2Name', e.target.value); emitGKMetaChange(); });
+    gk2NumberInput.addEventListener('change', e => { setMatchInfo('gk2Number', e.target.value); emitGKMetaChange(); });
+
+    /* Ein Initial-Event schicken, damit app.js beim ersten Laden sofort
+       die (ggf. gespeicherten) Werte übernimmt – ohne Reload. */
+    emitGKMetaChange();
 });
 
 // Ende src/js/header.js

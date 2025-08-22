@@ -39,6 +39,8 @@ import {
     setShowShotLines,
     setTF,
     setTor,
+    updateShot,
+    getMatchInfo,
 } from './db.js';
 import {
     drawMarker,
@@ -104,13 +106,58 @@ function refreshHalfDependentUI() {
  * 1.1 Badge Updates
  * ===================================================================*/
 
-/* =====================================================================
- * Gemeinsamer Helper – liefert „#1“ bzw. „#80“
- * (Fällt auf Torwart-Index zurück, falls Objekt fehlt)
- * ===================================================================*/
+/* Gemeinsamer Helper – liefert „#1“ bzw. „#80“
+   (Fällt auf Torwart-Index zurück, falls Nummer fehlt/leer) */
 function gkNumLabel(gkId) {
-    return `#${GOALKEEPERS[gkId]?.number ?? gkId}`;
+    const meta = GOALKEEPERS[gkId] || {};
+    const num = Number.isFinite(meta.number) ? meta.number : gkId;
+    return `#${num}`;
 }
+
+/* -------------------- GK-Metadaten-Handling ------------------------- */
+/** Übernimmt GK-Metadaten in GOALKEEPERS und stößt alle nötigen UI-Refreshes an. */
+function applyGoalkeeperMeta(meta = {}) {
+    const g1 = meta.gk1 || {};
+    const g2 = meta.gk2 || {};
+
+    // Nummern nur übernehmen, wenn valide Zahl; sonst auf „undefined“ lassen - Fallback greift
+    if (Number.isFinite(g1.number)) GOALKEEPERS[1].number = g1.number; else GOALKEEPERS[1].number = undefined;
+    GOALKEEPERS[1].name = (g1.name || '').trim();
+
+    if (Number.isFinite(g2.number)) GOALKEEPERS[2].number = g2.number; else GOALKEEPERS[2].number = undefined;
+    GOALKEEPERS[2].name = (g2.name || '').trim();
+
+    refreshGoalkeeperMetaUI();
+}
+
+/** Liest GK-Metadaten aus IndexedDB (MatchInfo) und wendet sie an. */
+async function hydrateGoalkeepersFromMatchInfo() {
+    try {
+        const mi = await getMatchInfo();
+        applyGoalkeeperMeta({
+            gk1: {number: parseInt(mi.gk1Number, 10), name: mi.gk1Name},
+            gk2: {number: parseInt(mi.gk2Number, 10), name: mi.gk2Name}
+        });
+    } catch (e) {
+        console.warn('[GK] MatchInfo lesen fehlgeschlagen', e);
+    }
+}
+
+/** Zentraler UI-Refresh nach GK-Meta-Änderung. */
+function refreshGoalkeeperMetaUI() {
+    updateGoalkeeperButton();   // Toggle-Label (#Nummer Name)
+    updateStatsHeading();       // H2 mit #Nummer
+    refreshHalfDependentUI();   // Badges + große GK-Tabelle
+    renderShotTable();          // kleine Shot-Tabelle
+    renderGkOverviewTable();    // Übersicht
+    drawAreas();                // Canvas (Minutenlabels etc.)
+}
+
+/* Event aus header.js abonnieren (sofort wirksam beim Tippen/Ändern) */
+window.addEventListener('gk-meta-change', (ev) => {
+    applyGoalkeeperMeta(ev?.detail || {});
+});
+
 
 /* =====================================================================
  * 1.1 Badge-Updates – Assists
@@ -179,8 +226,8 @@ function updateTFBadge() {
 
 /* --- 1.2 Spezial-Konstante: virtuelle Goal-Area für 7 m -------- */
 /* --------------------------------------------------------------
-   Zuordnung von Wurfkategorie → Statistikspalte.
-   – Synonyme abgedeckt (z. B. 'durchbruch' → 'km')
+   Zuordnung von Wurfkategorie - Statistikspalte.
+   – Synonyme abgedeckt (z. B. 'durchbruch' - 'km')
    – historische Bezeichnungen normalisiert (Kreis = 'km', Durchbruch zählt wie 'km')
 -------------------------------------------------------------- */
 const AREA_TO_COL = {
@@ -242,8 +289,8 @@ function updateRivalUndoState() {
 }
 
 // --- Caches --------------------
-let shotAreaMap = new Map(); // id → das entsprechende Zonenobjekt
-let goalAreaMap = new Map(); // id → das entsprechende Zonenobjekt
+let shotAreaMap = new Map(); // id - das entsprechende Zonenobjekt
+let goalAreaMap = new Map(); // id - das entsprechende Zonenobjekt
 
 /* Registrierung-Workflow */
 let currentStep = 1;
@@ -310,6 +357,10 @@ document.addEventListener('DOMContentLoaded', () =>
 async function initApp() {
     /* IndexedDB initialisieren */
     await initDB();
+
+    // GK-Metadaten früh ziehen, damit alle nachfolgenden UI-Bausteine
+    // (Badges/Tabellen) bereits die richtigen Nummern/Namen anzeigen.
+    await hydrateGoalkeepersFromMatchInfo();
 
     // --- 2. HZ-Flag aus localStorage vor Timer/UI laden -----------------------
     loadSecondHalfStarted();
@@ -426,6 +477,13 @@ async function initApp() {
     initServiceWorkerLifecycle();
     updateButtonStates();
     renderShotTable();
+
+    // Radial-Menü initialisieren/binden (nach erstem Tabellen-Render)
+    ensureShotRadialMenu();
+    bindShotTableRadial();
+    bindShotRadialApply();
+
+
     renderGkOverviewTable();
     enableRivalActionBtns(false);
 
@@ -439,7 +497,6 @@ async function initApp() {
     renderRivalShotTable();
     renderRivalGKStatTable();
     updateRivalUndoState();
-    applySmallAbbrevStyling();
     initRivalAccordion();
 }
 
@@ -474,8 +531,6 @@ function initRivalAccordion() {
 
     wrapper.appendChild(handle);
 
-    // den initialen Zustand aus localStorage auslesen
-
     // Persistenz-Keys für Accordion-Zustand + einmalige „Hint“-Markierung
     const LS_KEY = 'rivalAccordionOpen';
     const LS_SEEN = 'rivalAccordionSeen';
@@ -486,7 +541,6 @@ function initRivalAccordion() {
         initiallyOpen = (localStorage.getItem(LS_KEY) === '1');
     } catch {
     }
-
 
     if (!initiallyOpen) {
         wrapper.classList.add('is-collapsed');
@@ -560,17 +614,22 @@ function initCanvas() {
     ctx = canvas.getContext('2d');
 
     const bg = document.getElementById('background-image');
-    if (!bg) {
-        setCanvasSize();
-        ensureSevenMQuickBtn();
+
+    // Lokaler Helper: Canvas-Backing-Size setzen + 7m-Overlay initialisieren/platzieren
+    const setup = () => {
+        setCanvasSize(); // passt Größe an und triggert kompletten Redraw
+        ensureSevenMQuickBtn(); // erzeugt/positioniert den 7m-Quick-Button
+    };
+
+    // Wenn kein Bild vorhanden ODER bereits geladen dann sofort einrichten,
+    // sonst beim Laden (onload) nachziehen.
+    if (!bg || (bg.complete && bg.naturalWidth > 0)) {
+        setup();
     } else {
-        bg.complete ? (setCanvasSize(), ensureSevenMQuickBtn()) :
-            (bg.onload = () => {
-                setCanvasSize();
-                ensureSevenMQuickBtn();
-            });
+        bg.onload = setup;
     }
 
+    // Redraw/Resize-Hook
     window.addEventListener('resize', setCanvasSize);
 }
 
@@ -632,7 +691,7 @@ function upgradeRivalPosButtons() {
         container.addEventListener('click', (e) => {
             // Prüfen, ob auf einen Mini-Button (−/+) geklickt wurde
             const quickEl = e.target.closest('.rival-mini[data-quick]');
-            if (!quickEl) return; // normaler Klick → Pos.-Auswahl (bestehende Logik)
+            if (!quickEl) return; // normaler Klick - Pos.-Auswahl (bestehende Logik)
             e.stopPropagation(); // verhindert Auslösen der Host-Button-Logik
 
             // Zugehörigen Host-Button und seine Pos.-ID ermitteln
@@ -642,8 +701,8 @@ function upgradeRivalPosButtons() {
             if (!pos) return;
 
             // Gewählte Position kurzzeitig setzen und Quick-Shot speichern
-            //  − data-quick="save" → Parade
-            //  + data-quick="goal" → Tor
+            //  − data-quick="save" - Parade
+            //  + data-quick="goal" - Tor
             currentRivalPos = pos;
             const isSave = quickEl.dataset.quick === 'save';
 
@@ -657,7 +716,7 @@ function pruneLegacyRivalButtons() {
     // IDs der veralteten Buttons
     const LEGACY_IDS = ['goal-btn-rival', 'goalkeeper-save-btn-rival', 'cancel-btn-rival'];
 
-    // Buttons (falls vorhanden) entfernen → kein Fokus, keine Tastatur-Reihenfolge
+    // Buttons (falls vorhanden) entfernen - kein Fokus, keine Tastatur-Reihenfolge
     LEGACY_IDS.forEach(id => {
         const el = document.getElementById(id);
         if (el && el.parentElement) el.parentElement.removeChild(el);
@@ -667,7 +726,7 @@ function pruneLegacyRivalButtons() {
 /**
  * Verdrahtet alle UI-Events:
  * – Spieluhr (Start/Pause/Reset, ±-Sekunden)
- * – Canvas-Klickworkflow (Wurf → Torzone)
+ * – Canvas-Klickworkflow (Wurf - Torzone)
  * – Ergebnis-Buttons (Tor/Gehalten/Abbrechen/Undo)
  * – Optionen (Show Lines)
  * – Zähler-Buttons (Ass/7g6/Tor/TF)
@@ -842,49 +901,263 @@ function undoLastRivalShot() {
     updateRivalUndoState();
 }
 
-// In der RIVAL-Verlaufstabelle Farben invertieren:
-// • Parade des gegnerischen Keepers (isGoalkeeperSave = true) = schlecht für uns → ROT
-//   → erhält den Klassen-Namen 'shot-row--goal'
-// • Unser Tor (isGoalkeeperSave = false) = gut für uns → GRÜN
-//   → erhält den Klassen-Namen 'shot-row--save'
+/**
+ * Baut die Rival-Verlaufstabelle (letzte Aktionen gegen den gegnerischen Keeper).
+ * Farblogik:
+ *  – s.isGoalkeeperSave === true für uns schlecht (Gegner pariert) rot (shot-row--goal)
+ *  – s.isGoalkeeperSave === false für uns gut (Tor erzielt) grün (shot-row--save)
+ */
 function renderRivalShotTable() {
     const cont = document.getElementById('gk-overview-rival-table');
     if (!cont) return;
 
+    // Nur Shots des aktuell gewählten Rival-Keepers, neueste zuerst
     const rows = shots
         .filter(s => s.team === 'rival' && (s.goalkeeperId ?? 1) === currentRivalGoalkeeper)
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
+    // Tabelle neu aufbauen
     cont.innerHTML = '';
     const tbl = document.createElement('table');
     tbl.className = 'shot-table';
     tbl.innerHTML = `
-    <thead>
-      <tr><th>#</th><th>Min</th><th>Shot A</th><th>Goal A</th></tr>
-    </thead><tbody></tbody>`;
+      <thead>
+        <tr><th>#</th><th>Min</th><th>Shot A</th><th>Goal A</th></tr>
+      </thead>
+      <tbody></tbody>`;
     cont.appendChild(tbl);
 
     const tb = tbl.querySelector('tbody');
+
     rows.forEach((s, i) => {
         const tr = document.createElement('tr');
 
-        // ★ HIER der eigentliche Fix: Klassen vertauschen
+        // Klassen bewusst invertiert (aus Sicht SCM):
+        // Parade des gegnerischen Keepers = "schlecht" - rot (shot-row--goal)
+        // Tor für uns                          = "gut" - grün (shot-row--save)
         tr.className = s.isGoalkeeperSave ? 'shot-row--goal' : 'shot-row--save';
 
+        // Kategorie-Kürzel:
+        //  - "7 m" konsistent kleinschreiben
+        //  - alles andere in Großbuchstaben
+        const rawCat = s.shotCategory ?? '';
+        const cat = (typeof rawCat === 'string' && rawCat.toLowerCase() === '7m')
+            ? '7m'
+            : String(rawCat).toUpperCase();
+
         tr.innerHTML = `
-      <td>${rows.length - i}</td>
-      <td>${Math.ceil(s.gameSeconds / 60)}'</td>
-      <td>${s.shotCategory.toUpperCase()}</td>
-      <td>${s.isGoalkeeperSave ? '–' : 'Tor'}</td>`;
+          <td>${rows.length - i}</td>
+          <td>${Math.ceil((s.gameSeconds || 0) / 60)}'</td>
+          <td>${cat}</td>
+          <td>${s.isGoalkeeperSave ? '–' : 'Tor'}</td>`;
         tb.appendChild(tr);
     });
 
+    // Leerzustand
     if (!rows.length) {
         tb.innerHTML = `<tr><td colspan="4" style="padding:8px;">No shots yet …</td></tr>`;
     }
+
     updateRivalUndoState();
 }
 
+/* ===================================================================
+ * Radiales Schnellmenü für die W-Zelle (Shot-Position bearbeiten)
+ * ===================================================================*/
+/* Optionen für das Radial-Menü – die Reihenfolge bestimmt die Position am Ring.
+   Start ist 12 Uhr (oben), dann im Uhrzeigersinn. */
+const SHOT_OPTION_DEFS = [
+    {key: 'gs', label: 'GS'},
+    {key: 'km', label: 'KM'},
+    {key: 'dl', label: 'DL'},
+    {key: 'dm', label: 'DM'},
+    {key: 'dr', label: 'DR'},
+    {key: 'ra', label: 'RA'},
+    {key: 'la', label: 'LA'},
+    {key: 'rr', label: 'RR'},
+    {key: 'rm', label: 'RM'},
+    {key: 'rl', label: 'RL'},
+    {key: '7m', label: '7m'}
+];
+
+// einmaliges Anlegen des Overlays
+function ensureShotRadialMenu() {
+    if (document.getElementById('shot-radial-menu')) return;
+    const el = document.createElement('div');
+    el.id = 'shot-radial-menu';
+    el.className = 'shot-radial';
+    el.setAttribute('hidden', 'true');
+
+    el.innerHTML = `
+      <div class="shot-radial__core" aria-hidden="true">W</div>
+      <div class="shot-radial__ring"></div>
+    `;
+    document.body.appendChild(el);
+}
+
+// Delegation – Klick auf Button in W-Zelle öffnet Menü
+function bindShotTableRadial() {
+    const container = document.getElementById('shot-table-container');
+    if (!container || container.dataset.radialBound) return;
+
+    container.addEventListener('click', (e) => {
+        const btn = e.target.closest('.shot-edit-btn');
+        if (!btn) return;
+        const tr = btn.closest('tr');
+        const shotId = tr?.dataset.shotId;
+        if (!shotId) return;
+        openShotRadialFor(shotId, btn);
+    });
+    container.dataset.radialBound = '1';
+}
+
+// Öffnen/Positionieren + Buttons setzen
+function openShotRadialFor(shotId, anchorEl) {
+    const menu = document.getElementById('shot-radial-menu');
+    if (!menu) return;
+    menu.dataset.shotId = shotId;
+
+    // Mittelpunkt relativ zur W-Zelle ermitteln
+    const r = anchorEl.getBoundingClientRect();
+    const cx = Math.round(r.left + r.width / 2);
+    const cy = Math.round(r.top + r.height / 2);
+
+    // Container für die radialen Optionen
+    const ring = menu.querySelector('.shot-radial__ring');
+    if (!ring) return;
+
+    // ——————————————————————————————————————————————————————————————
+    // 1) Buttons erzeugen (noch ohne finale Position)
+    //    Reihenfolge in SHOT_OPTION_DEFS = Reihenfolge auf dem Ring.
+    // ——————————————————————————————————————————————————————————————
+    ring.innerHTML = '';
+    const btns = SHOT_OPTION_DEFS.map(def => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'shot-radial__opt';
+        b.textContent = def.label;
+        b.dataset.key = def.key;
+        b.setAttribute('aria-label', `Wurfposition ${def.label} wählen`);
+        ring.appendChild(b); // erst einhängen, damit Maße gemessen werden können
+        return b;
+    });
+
+    // ——————————————————————————————————————————————————————————————
+    // 2) Gleichmäßige Winkel berechnen
+    //    Start = 12 Uhr (−90°), dann im Uhrzeigersinn.
+    // ——————————————————————————————————————————————————————————————
+    const n = Math.max(1, btns.length);            // Schutz gegen Division durch 0
+    const stepDeg = 360 / n;                        // Winkelabstand in Grad
+    const startDeg = -90;                           // 12 Uhr oben
+    const stepRad = (Math.PI / 180) * stepDeg;
+
+    // ——————————————————————————————————————————————————————————————
+    // 3) Dynamischen Radius wählen, sodass Nachbarn sich nicht berühren.
+    //    chord length = 2R*sin(step/2)  >=  (Button-Durchmesser + Puffer)
+    //    Hinweis: Wenn das Menü (noch) hidden ist, liefert offsetWidth=0.
+    //             Fallback = 40px (passt zur CSS-Größe .shot-radial__opt).
+    // ——————————————————————————————————————————————————————————————
+    const sampleSize = btns[0]?.offsetWidth || 40;  // geschätzter Button-Durchmesser
+    const minGap = 6;                               // kleiner optischer Abstand in px
+    const minR = (sampleSize + minGap) / (2 * Math.sin(stepRad / 2) || 1);
+    const baseR = 80;                               // dein bisheriger Fixwert
+    const R = Math.max(baseR, Math.ceil(minR));     // nie kleiner als zuvor
+
+    // ——————————————————————————————————————————————————————————————
+    // 4) Endpositionen setzen – sauber gleichmäßig verteilt
+    // ——————————————————————————————————————————————————————————————
+    btns.forEach((btn, i) => {
+        const angleRad = (Math.PI / 180) * (startDeg + i * stepDeg);
+        const x = Math.round(Math.cos(angleRad) * R);
+        const y = Math.round(Math.sin(angleRad) * R);
+        btn.style.transform = `translate(${x}px, ${y}px)`;
+    });
+
+    // Menü an den Anker setzen
+    menu.style.left = `${cx}px`;
+    menu.style.top = `${cy}px`;
+
+    // Anzeigen (mit CSS-Animation)
+    menu.removeAttribute('hidden');
+    menu.classList.add('is-open');
+
+    // Schließen außen/ESC
+    setTimeout(() => {
+        document.addEventListener('click', shotRadialDocClose, {capture: true, once: true});
+        document.addEventListener('keydown', shotRadialEscClose, {once: true});
+    }, 0);
+}
+
+function closeShotRadial() {
+    const menu = document.getElementById('shot-radial-menu');
+    if (!menu) return;
+    // Ausblend-Animation – erst Klasse entfernen, danach hidden setzen
+    menu.classList.remove('is-open');
+    // kleines Timeout, damit die CSS-Transition sichtbar ist
+    setTimeout(() => menu.setAttribute('hidden', 'true'), 120);
+}
+
+function shotRadialDocClose(ev) {
+    if (ev.target.closest('#shot-radial-menu')) return;
+    closeShotRadial();
+}
+
+function shotRadialEscClose(ev) {
+    if (ev.key === 'Escape') closeShotRadial();
+}
+
+// Einmaliger Click-Handler fürs Overlay – Anwendung + Persist-Update
+function bindShotRadialApply() {
+    const menu = document.getElementById('shot-radial-menu');
+    if (!menu || menu.dataset.bound) return;
+
+    menu.addEventListener('click', async (e) => {
+        const opt = e.target.closest('.shot-radial__opt');
+        if (!opt) return;
+        const key = opt.dataset.key; // z.B. 'km' | '7m' …
+
+        const shotId = menu.dataset.shotId;
+        const i = shots.findIndex(s => String(s.id ?? '') === String(shotId));
+        if (i < 0) return;
+
+        const old = shots[i];
+
+        // neue Area-ID anhand Namens-Match (shotAreas) bestimmen
+        let newAreaId = old.shotAreaId;
+        const match = shotAreas.find(a => normalize(a.name) === key);
+        if (match) newAreaId = match.id;
+        else if (key === 'gs') newAreaId = undefined; // GS i.d.R. ohne court-Area
+
+        const patch = {
+            shotCategory: key.toUpperCase(), // UI-Kürzel konsistent in Großschrift
+            shotAreaId: newAreaId
+        };
+
+        try {
+            // Persistentes Update
+            const updated = await updateShot(old.id, patch);
+
+            // In-Memory 1:1 ersetzen
+            shots.splice(i, 1, updated);
+
+            // UI-Refresh (nur eigene Sichten nötig)
+            updateStatistics();
+            renderShotTable();
+            renderGkOverviewTable();
+            renderGKStatTable();
+            drawAreas();
+
+            showToast(`Wurfposition → ${updated.shotCategory}`, 'update');
+        } catch (err) {
+            console.error('[Radial-Update] Fehler beim Speichern:', err);
+            showToast('Konnte Änderung nicht speichern', 'offline');
+        } finally {
+            closeShotRadial();
+        }
+    });
+
+    menu.dataset.bound = '1';
+}
 
 // == 6. Area-Editor-Setup ==============================================
 /**
@@ -1057,7 +1330,7 @@ function renderShotTable() {
 
     rows.forEach((s, idx) => {
         /* --- Robust: 7 m anhand Kategorie ODER Area-Name erkennen -----------------
-           Quick-7m besitzt keine shotAreaId; reguläre 7m (per Zonen-Klick) schon. */
+           Quick-7m besitzt keine shotAreaId; reguläre 7 m (per Zonen-Klick) schon. */
         const isSevenMShot =
             normalize(s.shotCategory ?? (shotAreaMap.get(s.shotAreaId)?.name ?? '')) === '7m';
 
@@ -1066,8 +1339,8 @@ function renderShotTable() {
             ? '7m'
             : (shotAreaMap.get(s.shotAreaId)?.name ?? '–');
 
-        /* --- „T“ (Goal A): bei 7 m keinen Sektor, sondern „7m“ zeigen ---------------
-           (aus Zuschauersicht gespiegelt bleibt „7M“, was inhaltlich gleich bleibt) */
+        /* --- „T“ (Goal A): bei 7 m keinen Sektor, sondern „7 m“ zeigen ---------------
+           (aus Zuschauersicht gespiegelt bleibt „7 m“, was inhaltlich gleich bleibt) */
         const rawGoalLabel = isSevenMShot
             ? '7m'
             : (goalAreaMap.get(s.goalAreaId)?.name ?? '–');
@@ -1076,13 +1349,16 @@ function renderShotTable() {
         const min = Math.ceil((s.gameSeconds || 0) / 60);
 
         const tr = document.createElement('tr');
-        // Grün = Tor für uns (Gegentor des Gegners), Rot = gehalten (für Gegner gut)
+        // Grün = Parade unseres Torwarts (shot-row--save), Rot = Gegentor (shot-row--goal)
         tr.className = s.isGoalkeeperSave ? 'shot-row--save' : 'shot-row--goal';
+        // W-Zelle als Button; Datensatz-ID an die Zeile hängen (robust für Handler)
+        tr.dataset.shotId = s.id ?? '';
         tr.innerHTML = `
           <td>${rows.length - idx}</td>
           <td>${min}'</td>
-          <td>${shotName}</td>
+          <td class="shot-td--cat"><button type="button" class="shot-edit-btn">${shotName}</button></td>
           <td>${goalLabel}</td>`;
+
         tbody.appendChild(tr);
     });
 
@@ -1090,7 +1366,6 @@ function renderShotTable() {
         tbody.innerHTML = `<tr><td colspan="4" style="padding:8px;">No shots yet …</td></tr>`;
     }
 }
-
 
 /**
  * Übersichtstabelle für eigene Würfe inkl. laufender Quote.
@@ -1167,12 +1442,12 @@ function handleCanvasClick(e) {
     /* ---------- 1) Erster Klick ⇒ Shot-Area festlegen -------------- */
     if (!currentShotPosition) {
         const area = findShotAreaAtPoint(relX, relY, shotAreas);
-        if (!area) return; // ausserhalb → abbrechen
+        if (!area) return; // ausserhalb - abbrechen
         paintTempMarker(relX, relY); // gelben Marker malen
         currentShotPosition = area; // Wurfzone merken
         currentExactShotPos = {x: relX, y: relY};
 
-        /* === Sonderfall: 7-Meter → zweiter Klick entfällt ========= */
+        /* === Sonderfall: 7-Meter - zweiter Klick entfällt ========= */
         // 7 m robuster erkennen (Leerzeichen/Case/Akzent-frei)
         // robustere 7m-Erkennung über den gemeinsamen Normaliser
         const isSevenM = normalize(area.name ?? '') === '7m';
@@ -1197,7 +1472,7 @@ function handleCanvasClick(e) {
     ----------------------------------------------------------------*/
     if (!currentExactGoalPos) {
         const area = getClickedGoalArea(relX, relY);
-        if (!area) return; // ausserhalb → abbrechen
+        if (!area) return; // ausserhalb - abbrechen
 
         paintTempMarker(relX, relY); // roten Marker malen
         currentExactGoalPos = {x: relX, y: relY};
@@ -1403,7 +1678,7 @@ function drawAreas() {
         ctx.restore();
     });
 
-    // Früh-Exit: Keine Shots → nur temporäre Marker (Work-in-Progress) zeigen
+    // Früh-Exit: Keine Shots - nur temporäre Marker (Work-in-Progress) zeigen
     if (!shots.length) {
         drawTempMarkerIfAvailable(currentExactShotPos);
         drawTempMarkerIfAvailable(currentExactGoalPos);
@@ -1445,7 +1720,7 @@ function drawAreas() {
         drawMarker(ctx, shotPt.x, shotPt.y, 12, col);
         drawMarker(ctx, goalPt.x, goalPt.y, 8, col);
 
-        // Minutenrundung: "ceil" statt "floor", damit 0:01 → 1'
+        // Minutenrundung: "ceil" statt "floor", damit 0:01 - 1'
         drawText(ctx, String(Math.ceil(s.gameSeconds / 60) || 0), shotPt.x, shotPt.y, '12px Arial', '#000');
     });
 
@@ -1545,7 +1820,7 @@ function toggleGameTimer() {
     if (gameRunning) {
         // --- Pause drücken ------------------------------------------------------
         clearInterval(gameInterval);
-        btn.textContent = 'Resume';
+        btn.textContent = 'Fortsetzen';
     } else {
         // --- Start drücken ------------------------------------------------------
         // Wenn wir ab 30:00 neu starten und die 2. HZ noch nicht „aktiv“ ist,
@@ -1654,7 +1929,7 @@ const formatTime = sec =>
  */
 async function handleConnectionChange() {
     if (navigator.onLine) {
-        // Falls ein Offline-Hinweis offen war → entfernen
+        // Falls ein Offline-Hinweis offen war - entfernen
         document.querySelector('.toast--offline')?.remove();
 
         // Nur Datensätze ohne ID sind "unsynced" (offline erfasst)
@@ -1808,7 +2083,7 @@ function findAreaAtPoint(relX, relY, areasArr) {
                 return px >= x1 && px <= x2 && py >= y1 && py <= y2;
             }
 
-            // zu wenig Punkte → kein Treffer
+            // zu wenig Punkte - kein Treffer
             return false;
         }
 
@@ -1827,8 +2102,8 @@ function findAreaAtPoint(relX, relY, areasArr) {
 }
 
 /* ======================================================================
- * Mini-Gate Mapping (7m): Klicks auf die kleinen Mini-Tore (rechts oben)
- * werden auf die bestehenden 3×3 Goal-Areas (OL…UR) gemappt.
+ * Mini-Gate Mapping (7 m): Klicks auf die kleinen Mini-Tore (rechts oben)
+ * werden auf die bestehenden 3 × 3 Goal-Areas (OL - UR) gemappt.
  * ─ Minimal-invasiv: kein Duplizieren von Areas, nur Rechenlogik.
  * ====================================================================*/
 
@@ -1843,7 +2118,7 @@ const MINI_GOAL_BBOX = {
 };
 
 /* ======================================================================
- * Quick-Button „7m“ (Overlay) – schnelles Loggen GEHALTEN/TOR
+ * Quick-Button „7 m“ (Overlay) – schnelles Loggen GEHALTEN/TOR
  * über eine kompakte Schaltfläche direkt am Mini-Tor.
  * ====================================================================*/
 
@@ -1948,12 +2223,12 @@ async function quickSevenM(isSave) {
         gameTime: formatTime(gameSeconds),
         gameMinutesFloor: Math.floor(gameSeconds / 60),
         gameSeconds,
-        // Minimal-Logik für 7m: Kategorie setzen, aber keine exakten Koordinaten
+        // Minimal-Logik für 7 m: Kategorie setzen, aber keine exakten Koordinaten
         shotCategory: '7m',
         isGoalkeeperSave: isSave,
         goalkeeperId: currentGoalkeeper,
         half: halfAtShot
-        // Hinweis: goalAreaId bewusst weggelassen → Tabelle/Export behandeln '7m' bereits sauber
+        // Hinweis: goalAreaId bewusst weggelassen - Tabelle/Export behandeln '7 m' bereits sauber
     };
 
     try {
@@ -1984,7 +2259,7 @@ async function quickSevenM(isSave) {
 
 /** Liefert – falls möglich – die getroffene Goal-Area.
  *  1) Standard-Rechteck/Polygon-Treffer in `goalAreas`
- *  2) Falls kein Treffer: Mini-Tor-Bereich in 3 × 3 Zellen teilen und Namen (OL..UR) bestimmen
+ *  2) Falls kein Treffer: Mini-Tor-Bereich in 3 × 3 Zellen teilen und Namen (OL - UR) bestimmen
  */
 function getClickedGoalArea(relX, relY) {
     const area = findAreaAtPoint(relX, relY, goalAreas);
@@ -2014,7 +2289,7 @@ function getClickedGoalArea(relX, relY) {
 function canonicalSectorName(raw) {
     const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
     const MAP = {
-        // EN → Kanon (Oben/Mitte/Unten)
+        // EN - Kanon (Oben/Mitte/Unten)
         'TOP LEFT': 'OL', 'UP LEFT': 'OL', 'UPPER LEFT': 'OL', 'TL': 'OL',
         'TOP MIDDLE': 'OM', 'TOP CENTER': 'OM', 'TM': 'OM',
         'TOP RIGHT': 'OR', 'UP RIGHT': 'OR', 'UPPER RIGHT': 'OR', 'TR': 'OR',
@@ -2068,40 +2343,6 @@ function updateRivalGoalkeeperButton() {
     btn.classList.toggle('rivalkeeper-2', currentRivalGoalkeeper === 2);
 }
 
-/* ===================================================================
- * Mini-Feature: Nur die Tokens (RL, RM, RR/LA, RA/DB) visuell halbieren.
- * – wir wrappen die Treffer mit <span style="font-size: .5em"> </span>
- * – Selektoren decken jetzt auch die 1. Spalte im <tbody> ab (Σ-Zeile).
- * ===================================================================*/
-function applySmallAbbrevStyling() {
-    // Regex für exakte Token-Treffer (Case-insensitive)
-    const RE = /\b(RL|RM|RR\/LA|RA\/DB)\b/gi;
-
-    // Ziele – Thead-Header, 1. Spalte im Body (enthält "#1 Σ …"), Positions-Buttons
-    const selectors = [
-        '#gk-stat-table thead th',
-        '#gk-stat-table tbody tr td:first-child', // Σ-Zeile mit "#1 Σ RL …"
-        '#rival-gk-stat-table thead th',
-        '.gk-overview-positions-btns-container .gk-overview-action-btn'
-    ].join(', ');
-
-    document.querySelectorAll(selectors).forEach(el => {
-        // Doppelte Anwendung vermeiden
-        if (el.querySelector('.abbr--half')) return;
-
-        // Nur das Vorkommen der Tokens wrappen – Rest unverändert lassen
-        const html = el.innerHTML;
-        const wrapped = html.replace(
-            RE,
-            '<span class="abbr--half" style="font-size:0.5em">$1</span>'
-        );
-
-        if (wrapped !== html) {
-            el.innerHTML = wrapped;
-        }
-    });
-}
-
 /**
  * Schreibt für eine Tabellenzeile (tr) die Felder „Paraden/gesamt“ (TOTAL_IDX)
  * und „%“ (PERCENT_IDX) anhand der bereits eingetragenen Werte in
@@ -2136,7 +2377,7 @@ function writeTotalsForRow(tr) {
 function applyShotToRow(tr, sh) {
     const td = tr.children;
 
-    // 1) Wurfkategorie robust bestimmen (Shot-Feld → Fallback auf Area-Name)
+    // 1) Wurfkategorie robust bestimmen (Shot-Feld - Fallback auf Area-Name)
     const areaName = shotAreaMap.get(sh.shotAreaId)?.name ?? '';
     const baseName = normalize(sh.shotCategory ?? areaName);
 
@@ -2258,9 +2499,9 @@ async function resetTFCounters(skipRender = false) {
 
 /* ---------- Spalten-Layout ----------
    Feste Indizes: wichtig, um sowohl Paraden- als auch Gegentor-Spalten
-   zuverlässig zu treffen. COLS = 33 → Indizes 0..32.
+   zuverlässig zu treffen. COLS = 33 - Indizes 0..32.
    Die Maps LEFT_COL_MAP/RIGHT_COL_MAP sind dabei die einzigen "Wahrheiten"
-   für Zonen→Spalte. */
+   für Zonen-Spalte. */
 const ASS_IDX = 14; // Spalte Ass
 const TOR_HEAD_IDX = 15; // Spalte „Tor“ (eigene Tore, nicht Gegentore!)
 const DIVIDER_IDX = 16; // Visueller Trenner
@@ -2275,7 +2516,7 @@ const PERCENT_IDX = COLS - 1; // 32: Prozentzahl „%“
  – Rückraum: rl, rm, rr
  – Außen: la, ra
  – Durchbruch: dl, dm, dr
- Legacy-Fall: ältere Datensätze haben „db“/„durchbruch“ → zählen als Durchbruch.
+ Legacy-Fall: ältere Datensätze haben „db“/„durchbruch“ - zählen als Durchbruch.
  Wir werten deshalb direkt über `shots` aus (nicht über Tabellenspalten),
  um diese Synonyme sicher zu erwischen.
 ---------------------------------------------------------------------- */
@@ -2288,7 +2529,7 @@ const SUM_INCLUDED_KEYS = new Set([
 
 // Normalisierung: Umlaute/ß entfernen, lowercasing
 // so matchen wir zuverlässig auch legacy-Bezeichnungen auf AREA_TO_COL.
-// Normalisierung: Diakritika entfernen, ß→ss, alle Whitespaces entfernen, in Kleinbuchstaben
+// Normalisierung: Diakritika entfernen, ß-ss, alle Whitespaces entfernen, in Kleinbuchstaben
 const normalize = s => s
     ?.normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Diakritika (Combining Marks) entfernen
     .replace(/ß/g, 'ss')                               // ß konsistent in ss überführen
@@ -2391,7 +2632,8 @@ function renderGKStatTable() {
     const appendGKSumRow = (gk) => {
         /* GK-Label dynamisch aus Metadaten (#<Nummer>) */
         const gkNum = GOALKEEPERS[gk]?.number ?? gk;
-        const label = `#${gkNum} Σ RL RM RR/LA RA/DB`;
+        // const label = `#${gkNum} Σ RL RM RR/LA RA/DB`;
+        const label = `#${gkNum} Σ`;
 
         /* --- Summen robust direkt aus den Shots ermitteln ----------- */
         let saves = 0, goals = 0;
@@ -2430,11 +2672,8 @@ function renderGKStatTable() {
     appendGKSumRow(1);
     appendGKSumRow(2);
 
-    // Typografische Halbierung für Tokens anwenden (nach jedem Rebuild)
-    applySmallAbbrevStyling();
-
     // Hinweis zu Legacy „Durchbruch“: In AREA_TO_COL gibt es sowohl dl/dm/dr als auch die Synonyme
-    // db/durchbruch → 'km'. Daher kann die Summe nicht aus den fertigen Tabellenzellen berechnet werden,
+    // db/durchbruch - 'km'. Daher kann die Summe nicht aus den fertigen Tabellenzellen berechnet werden,
     // da sie sich mit Würfen von „Kreis“ vermischen würde. Die obige Variante berechnet die Summe anhand der shots,
     // wodurch die Summenzeile auch solche alten Einträge korrekt berücksichtigt.
 }
@@ -2485,16 +2724,12 @@ function renderRivalGKStatTable() {
         writeTotalsForRow(tr);
 
         const td = tr.children;
-        // Rival führt keine manuellen Zähler → leer lassen
+        // Rival führt keine manuellen Zähler - leer lassen
         td[ASS_IDX].textContent = '';
         td[TOR_HEAD_IDX].textContent = '';
         td[SEVENG6_IDX].textContent = '';
         td[TF_IDX].textContent = '';
     });
-
-    // Einheitlich auch im Rival-Table anwenden
-    applySmallAbbrevStyling();
-
 }
 
 /** Setzt die Sektionsüberschrift konsistent auf „Shot Statistics – #<Trikotnummer>“. */
@@ -2583,7 +2818,7 @@ async function hardResetGame() {
     /* 1) Alle Shots & Statistik zurücksetzen */
     await clearAllData(true);
 
-    /* 1a–1d) Zähler in einem Batch zurücksetzen – ohne Zwischen-Render */
+    /* Zähler in einem Batch zurücksetzen – ohne Zwischen-Render */
     await resetAssCounters(true);
     await resetSevenG6Counters(true);
     await resetTorCounters(true);
@@ -2635,7 +2870,11 @@ async function hardResetGame() {
             setMatchInfo('team', ''),
             setMatchInfo('opponent', ''),
             setMatchInfo('halftime', ''),
-            setMatchInfo('fulltime', '')
+            setMatchInfo('fulltime', ''),
+            setMatchInfo('gk1Name', ''),
+            setMatchInfo('gk1Number', ''),
+            setMatchInfo('gk2Name', ''),
+            setMatchInfo('gk2Number', '')
         ]);
 
         // UI-Felder zurücksetzen
@@ -2646,14 +2885,15 @@ async function hardResetGame() {
 
         // Match-Info-Felder komplett leeren
         [
-            'team-input', // Team
-            'opponent-input', // Gegner
-            'halftime-input', // Halbzeit
-            'fulltime-input', // Endstand
-            'competition-input', // Wettbewerb
-            'date-input', // Datum
-            'location-input' // Spielort
+            'team-input', 'opponent-input', 'halftime-input', 'fulltime-input',
+            'competition-input', 'date-input', 'location-input',
+            'gk1-name-input', 'gk1-number-input', 'gk2-name-input', 'gk2-number-input'
         ].forEach(idClear);
+
+        // Lokales Modell ebenfalls „leeren“, damit sofort #<Index> greift
+        GOALKEEPERS[1].name = ''; GOALKEEPERS[1].number = undefined;
+        GOALKEEPERS[2].name = ''; GOALKEEPERS[2].number = undefined;
+        refreshGoalkeeperMetaUI();
 
     } catch (err) {
         console.error('[RESET] Match-Info löschen fehlgeschlagen:', err);
@@ -2664,13 +2904,82 @@ async function hardResetGame() {
 }
 
 /**
- * Initialisiert den GK-Toggle:
- * – stellt beim Laden den letzten Keeper aus IndexedDB wieder her
- * – bindet den Klick zum Umschalten (1 ↔ 2)
- * – aktualisiert alle abhängigen UI-Teile in konsistenter Reihenfolge
+ * Initialisiert den GK-Toggle.
+ * Optionales Verhalten:
+ *  – liest den aktiven Keeper nur dann erneut aus IndexedDB,
+ *    wenn `skipLoad` = false ist (Standard).
+ *  – Wenn `skipLoad` = true übergeben wird (z. B. direkt nach initApp()),
+ *    wird NICHT erneut geladen, sondern lediglich die UI auf den bereits
+ *    bekannten `currentGoalkeeper` synchronisiert.
+ *
+ * @param {boolean} [skipLoad=false]  true = kein erneuter DB-Lesezugriff
  */
-async function changeGoalkeeper() {
-    /* --- DOM-Referenz & Startwert aus IndexedDB --------------- */
+async function changeGoalkeeper(skipLoad = false) {
+    /* --- DOM-Referenz auf den Toggle-Button ------------------------ */
+    const btn = document.getElementById('change-goalkeeper-btn');
+    if (!btn) {
+        console.warn('[GK] Button »change-goalkeeper-btn« nicht gefunden');
+        return;
+    }
+
+    /* --- Startwert nur laden, wenn explizit gewünscht -------------- */
+    if (!skipLoad) {
+        try {
+            // Letzten Keeper aus IndexedDB laden (Default = 1)
+            currentGoalkeeper = await getCurrentGoalkeeper();
+        } catch (err) {
+            console.warn('[GK] Laden des aktiven Keepers fehlgeschlagen:', err);
+        }
+    }
+
+    /* --- UI auf den aktuell bekannten Keeper bringen ----------------
+       WICHTIG: Reihenfolge beibehalten, damit abhängige Elemente
+       (Badges, Tabellen, Canvas etc.) konsistent sind. */
+    updateGoalkeeperButton();     // Badge/Style
+    refreshHalfDependentUI();     // Halbzeitabhängige Badges + GK-Stat
+    updateStatsHeading();         // H2-Überschrift
+    updateStatistics();           // Boxen (Shot/Goal-Areas)
+    renderShotTable();            // rechts: letzte Würfe (eigene)
+    renderGkOverviewTable();      // links: Übersichtstabelle (eigene)
+    drawAreas();                  // Canvas-Layer
+    updateButtonStates();         // Undo-Status u. a.
+
+    /* --- Klick-Handler einmalig binden ----------------------------- */
+    if (!btn.dataset.bound) {
+        btn.addEventListener('click', async () => {
+            // Laufenden Erfassungsschritt sauber abbrechen, damit kein
+            // halbfertiger Shot dem falschen Keeper zugeordnet wird.
+            resetRegistrationProcess();
+
+            // 1) Keeper umschalten (1 - 2)
+            currentGoalkeeper = (currentGoalkeeper === 1 ? 2 : 1);
+
+            // 2) Oberfläche konsistent neu aufbauen
+            updateGoalkeeperButton();
+            refreshHalfDependentUI(); // enthält renderGKStatTable
+            updateStatsHeading();
+            updateStatistics();
+            renderShotTable();
+            renderGkOverviewTable();
+            drawAreas();
+            updateButtonStates();
+
+            // 3) Persistenz aktualisieren
+            try {
+                await setCurrentGoalkeeper(currentGoalkeeper);
+            } catch (err) {
+                console.error('[GK] IndexedDB-Speichern fehlgeschlagen:', err);
+                showToast('Torwart-Wechsel konnte nicht gespeichert werden', 'offline');
+            }
+        });
+
+        btn.dataset.bound = '1';
+    }
+}
+
+
+/*async function changeGoalkeeper() {
+    /!* --- DOM-Referenz & Startwert aus IndexedDB --------------- *!/
     const btn = document.getElementById('change-goalkeeper-btn');
 
     if (!btn) {
@@ -2681,9 +2990,9 @@ async function changeGoalkeeper() {
     // Letzten Keeper aus IndexedDB laden (Default = 1)
     currentGoalkeeper = await getCurrentGoalkeeper();
 
-    /* --- UI auf Initialwert bringen ---------------------------
+    /!* --- UI auf Initialwert bringen ---------------------------
        WICHTIG: Reihenfolge so lassen, damit alle abhängigen
-       Anzeigen konsistent zum geladenen GK sind. */
+       Anzeigen konsistent zum geladenen GK sind. *!/
     updateGoalkeeperButton(); // Badge/Style
     refreshHalfDependentUI(); // Halbzeitabhängige Badges + GK-Stat
     updateStatsHeading(); // H2-Überschrift
@@ -2693,7 +3002,7 @@ async function changeGoalkeeper() {
     drawAreas(); // Canvas-Layer
     updateButtonStates(); // Undo-Status passend zum geladenen GK
 
-    /* --- Klick-Handler binden --------------------------------- */
+    /!* --- Klick-Handler binden --------------------------------- *!/
     if (!btn.dataset.bound) {
         btn.addEventListener('click', async () => {
             // Optional: laufenden Registrierungs-Flow beim GK-Wechsel sauber abbrechen
@@ -2726,19 +3035,19 @@ async function changeGoalkeeper() {
 
         btn.dataset.bound = '1';
     }
-
-}
+}*/
 
 /** Aktualisiert Label (#<Nummer> Name) und Farbschema des GK-Toggles. */
 function updateGoalkeeperButton() {
     const btn = document.getElementById('change-goalkeeper-btn');
     if (!btn) return;
 
-    const {number, name} = GOALKEEPERS[currentGoalkeeper] ??
-    {number: currentGoalkeeper, name: ''};
+    const meta = GOALKEEPERS[currentGoalkeeper] || {};
+    const num = Number.isFinite(meta.number) ? meta.number : currentGoalkeeper;
+    const name = meta.name || '';
 
     /* Badge-Markup: <span class="gk-num">#1</span> Hernandez */
-    btn.innerHTML = `<span class="gk-num">#${number}</span> ${name}`;
+    btn.innerHTML = `<span class="gk-num">#${num}</span> ${name}`;
     btn.dataset.goalkeeperId = currentGoalkeeper;
 
     btn.classList.remove('goalkeeper-1', 'goalkeeper-2');
